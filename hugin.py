@@ -1,30 +1,50 @@
 import time
 import random
+import signal
 import threading
+import multiprocessing
 import psutil
 import cairo
-#import Gtk # for Gtk.gdk.get_default_root_window
 import gi
-gi.require_version('Gtk', '3.0')
 
+gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk
 
 
-#window = Gtk.gdk.get_default_root_window()
-#context = window.cairo_create()
+class PeriodicCall(threading.Thread):
 
-class Monitor(Gtk.Window):
+    """ Periodically forces a window to redraw """
+
+    target = None
+    interval = None
+
+    def __init__(self, target, interval):
+        
+        super(PeriodicCall, self).__init__()
+        self.daemon = True
+
+        self.target = target
+        self.interval = interval
+
+
+    def run(self):
+
+        while True: # This thread will automatically die with its parent because of the daemon flag
+
+            self.target()
+            time.sleep(self.interval)
+
+
+class Window(Gtk.Window):
 
     def __init__(self):
 
-        super(Monitor, self).__init__()
+        super(Window, self).__init__()
 
         self.set_title('hugin')
         self.set_role('hugin')
-        self.resize(200, 1080-36)
-        #self.set_resizable(False)
-        #self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
-        self.move(100, 0)
+        self.resize(200, 1080-32)
+        self.stick() # show this window on every virtual desktop
 
         self.set_app_paintable(True)
         self.set_type_hint(Gdk.WindowTypeHint.DOCK)
@@ -40,21 +60,18 @@ class Monitor(Gtk.Window):
 
         self.connect('delete-event', Gtk.main_quit)
         self.show_all()
+        self.move(0, 32) # move apparently must be called after show_all
 
 
     def tick(self, wid, cr):
-
-        #import pudb; pudb.set_trace()
 
         cr.set_operator(cairo.OPERATOR_CLEAR)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
 
         cr.set_source_rgba(1, 0, 0, 0.4)
-        cr.rectangle(0, 0, self.width, self.height)
+        cr.rectangle(0, 0, random.randint(0, self.width), random.randint(0, self.height))
         cr.fill()
-
-        #print "tick!"
 
 
     @property
@@ -69,31 +86,106 @@ class Monitor(Gtk.Window):
         return self.get_size()[1]
 
 
-class Refresher(threading.Thread):
+class Monitor(threading.Thread):
 
-    window = None
-    interval = None
+    def __init__(self, collector_type):
 
-    def __init__(self, window, interval):
-        
-        super(Refresher, self).__init__()
+        super(Monitor, self).__init__()
         self.daemon = True
 
-        self.window = window
-        self.interval = interval
+        self.update_queue = multiprocessing.Queue(1)
+        self.data_queue = multiprocessing.Queue(1)
+        self.collector = collector_type(self.update_queue, self.data_queue)
+        self.data = []
 
+    def tick(self):
+
+        if not self.update_queue.full():
+            print "SEND UPDATE"
+            self.update_queue.put('UPDATE', False)
+
+
+
+    def start(self):
+
+        self.collector.start()
+        super(Monitor, self).start()
 
 
     def run(self):
 
         while True:
-            #print "florb"
-            self.window.queue_draw()
-            time.sleep(self.interval)
+            data = self.data_queue.get(True)
+            print "GOT DATA!", data
+            self.data = data
 
 
-m = Monitor()
-t = Refresher(m, 0.1)
-t.start()
+class Collector(multiprocessing.Process):
 
-Gtk.main()
+    def __init__(self, update_queue, data_queue):
+
+        super(Collector, self).__init__()
+        self.daemon = True
+        self.update_queue = update_queue
+        self.data_queue = data_queue
+
+
+    def run(self):
+
+        while True:
+
+            msg = self.update_queue.get(True)
+            if msg == 'UPDATE':
+                print "RECV UPDATE"
+                self.update()
+
+
+    def update(self):
+
+        pass
+
+
+class CPUCollector(Collector):
+
+    def update(self):
+
+        aggregate = psutil.cpu_percent(percpu=False, interval=0.5)
+        percpu = psutil.cpu_percent(percpu=True, interval=0.5)
+
+        self.data_queue.put([aggregate, percpu])
+
+
+
+class Hugin(object):
+
+    window = None
+    monitors = None
+
+
+    def __init__(self):
+
+        self.window = Window()
+        self.monitors = []
+        self.monitors.append(Monitor(CPUCollector))
+    
+    def tick(self):
+
+        for monitor in self.monitors:
+            monitor.tick()
+        self.window.queue_draw()
+
+
+    def start(self):
+
+        for monitor in self.monitors:
+            monitor.start()
+
+        t = PeriodicCall(self.tick, 0.02)
+        t.start()
+        
+        signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
+        Gtk.main()
+
+
+hugin = Hugin()
+hugin.start()
