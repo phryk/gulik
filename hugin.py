@@ -99,9 +99,11 @@ class Monitor(threading.Thread):
         self.data = []
 
     def tick(self):
+            
+        #print "TICK"
 
         if not self.update_queue.full():
-            print "SEND UPDATE"
+            #print "SEND UPDATE"
             self.update_queue.put('UPDATE', False)
 
 
@@ -116,7 +118,7 @@ class Monitor(threading.Thread):
 
         while True:
             data = self.data_queue.get(True)
-            print "GOT DATA!", data
+            #print "GOT DATA!", data
             self.data = data
 
 
@@ -136,7 +138,7 @@ class Collector(multiprocessing.Process):
 
             msg = self.update_queue.get(True)
             if msg == 'UPDATE':
-                print "RECV UPDATE"
+                #print "RECV UPDATE"
                 self.update()
 
 
@@ -180,7 +182,7 @@ class Hugin(object):
         for monitor in self.monitors:
             monitor.start()
 
-        t = PeriodicCall(self.tick, 0.02)
+        t = PeriodicCall(self.tick, 0.03)
         t.start()
         
         signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
