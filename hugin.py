@@ -12,29 +12,49 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
 
 
-class PeriodicCall(threading.Thread):
+## Helpers ##
 
-    """ Periodically forces a window to redraw """
+def pretty_bytes(bytecount):
 
-    daemon = True
-    target = None
-    interval = None
+    """
+    Return a human readable representation given a size in bytes.
+    """
 
-    def __init__(self, target, hz):
-        
-        super(PeriodicCall, self).__init__()
-        self.daemon = True
+    units = ['Byte', 'Kilobuns', 'Megabuns', 'Gigabuns', 'Terabuns']
 
-        self.target = target
-        self.interval = 1.0/hz
+    value = bytecount
+    for unit in units:
+        if value / 1024.0 < 1:
+            break
+
+        value /= 1024.0
+
+    return "%.2f %s" % (value, unit)
 
 
-    def run(self):
-
-        while True: # This thread will automatically die with its parent because of the daemon flag
-
-            self.target()
-            time.sleep(self.interval)
+##class PeriodicCall(threading.Thread):
+#
+#    """ Periodically forces a window to redraw """
+#
+#    daemon = True
+#    target = None
+#    interval = None
+#
+#    def __init__(self, target, hz):
+#        
+#        super(PeriodicCall, self).__init__()
+#        self.daemon = True
+#
+#        self.target = target
+#        self.interval = 1.0/hz
+#
+#
+#    def run(self):
+#
+#        while True: # This thread will automatically die with its parent because of the daemon flag
+#
+#            self.target()
+#            time.sleep(self.interval)
 
 
 class Window(Gtk.Window):
@@ -110,6 +130,14 @@ class CPUCollector(Collector):
         time.sleep(0.1) # according to psutil docs, there should at least be 0.1 seconds between calls to cpu_percent without interval
 
 
+class MemoryCollector(Collector):
+
+    def update(self):
+
+        data = psutil.virtual_memory()
+        self.queue_data.put(data, block=True)
+
+
 class Monitor(threading.Thread):
 
     collector_type = Collector
@@ -161,6 +189,16 @@ class CPUMonitor(Monitor):
             return self.data[0] / 100.0
 
 
+class MemoryMonitor(Monitor):
+
+    collector_type = MemoryCollector
+
+
+    def normalized(self, idx=None):
+        if len(self.data):
+            return self.data.percent / 100.0
+
+
 class Gauge(object):
 
     x = None
@@ -202,12 +240,10 @@ class ArcGauge(Gauge):
 
     def update(self, context, value):
        
-        #value = value[0] / 100 # FIXME: normalization and such should be done by hugin or monitor!
-
         context.set_line_width(self.stroke_width)
         context.set_line_cap(cairo.LINE_CAP_ROUND)
 
-        context.set_source_rgba(0.5, 1, 0, 0.2)
+        context.set_source_rgba(0.5, 1, 0, 0.1)
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -246,15 +282,10 @@ class Hugin(object):
         
         self.monitors = {}
         self.monitors['cpu'] = CPUMonitor()
+        self.monitors['memory'] = MemoryMonitor()
 
         self.gauges = {}
-        self.gauges['cpu'] = [
-            ArcGauge(x=0, y=0, width=self.window.width, height=150, stroke_width=10), # aggregate load
-            ArcGauge(x=0, y=150, width=self.window.width / 2, height=100, normalize_param=0), 
-            ArcGauge(x=self.window.width/2, y=150, width=self.window.width / 2, height=100, normalize_param=1), 
-            ArcGauge(x=0, y=250, width=self.window.width / 2, height=100, normalize_param=2), 
-            ArcGauge(x=self.window.width/2, y=250, width=self.window.width / 2, height=100, normalize_param=3) 
-        ]
+
 
     def tick(self):
 
@@ -271,11 +302,6 @@ class Hugin(object):
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
 
-        context.set_source_rgba(0.5, 1, 0, 0.2)
-        #context.rectangle(0, 0, random.randint(0, self.window.width), random.randint(0, self.window.height))
-        #context.fill()
-        #print "draw"
-
         for source, monitor in self.monitors.iteritems():
 
             if len(monitor.data) and self.gauges.has_key(source):
@@ -290,15 +316,25 @@ class Hugin(object):
         for monitor in self.monitors.itervalues():
             monitor.start()
 
-        #t = PeriodicCall(self.tick, 600)
-        #t.start()
-        
         signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
-        GLib.timeout_add(1000/60, self.tick)
-        #GLib.idle_add(idle)
+        GLib.timeout_add(1000/10, self.tick)
         Gtk.main()
-        print "OSHIT GTK MAIN DIED"
+        print "Thank you for flying with phryk evil mad sciences, LLC. Please come again."
 
 
 hugin = Hugin()
+
+
+hugin.gauges['cpu'] = [
+    ArcGauge(x=0, y=0, width=hugin.window.width, height=150, stroke_width=10), # aggregate load
+    ArcGauge(x=0, y=150, width=hugin.window.width / 2, height=100, normalize_param=0), 
+    ArcGauge(x=hugin.window.width/2, y=150, width=hugin.window.width / 2, height=100, normalize_param=1), 
+    ArcGauge(x=0, y=250, width=hugin.window.width / 2, height=100, normalize_param=2), 
+    ArcGauge(x=hugin.window.width/2, y=250, width=hugin.window.width / 2, height=100, normalize_param=3) 
+]
+
+hugin.gauges['memory'] = [
+    ArcGauge(x=0, y=400, width=hugin.window.width, height=hugin.window.width, stroke_width=30)
+]
+
 hugin.start()
