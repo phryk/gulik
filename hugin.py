@@ -9,7 +9,7 @@ import cairo
 import gi
 
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 
 ## Helpers ##
@@ -30,6 +30,30 @@ def pretty_bytes(bytecount):
         value /= 1024.0
 
     return "%.2f %s" % (value, unit)
+
+
+def render_caption(context, text, x, y, color=None):
+
+    if color is None:
+        color = (1,1,1, 0.8)
+    
+    context.set_source_rgba(*color)
+    
+    font = Pango.FontDescription('Orbitron 14')
+
+    #pango_context = PangoCairo.CairoContext(context)
+    #pango_context.set_antialias(cairo.ANTIALIAS_SUBPIXEL) # such crisp
+
+    layout = PangoCairo.create_layout(context)
+    layout.set_font_description(font)
+    layout.set_text(text, -1)
+    
+    #print pango_context
+    #pango_context.update_layout(layout)
+    #pango_context.show_layout(layout)
+
+    PangoCairo.update_layout(context, layout)
+    PangoCairo.show_layout(context, layout)
 
 
 ##class PeriodicCall(threading.Thread):
@@ -206,20 +230,25 @@ class Gauge(object):
     width = None
     height = None
     padding = None
-    normalize_param = None
+    normalize_idx = None
+    captions = None
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, normalize_param=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, normalize_idx=None, captions=None):
 
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.padding = padding
-        self.normalize_param = normalize_param
+        self.normalize_idx = normalize_idx
+        self.captions = captions if captions else list()
 
 
     def update(self, context, value):
-        raise NotImplementedError("%s.update not implemented!" % self.__class__.__name__)
+
+        for caption in self.captions:
+
+            render_caption(context, caption['text'], 0, 0)
 
 
 class ArcGauge(Gauge):
@@ -243,7 +272,7 @@ class ArcGauge(Gauge):
         context.set_line_width(self.stroke_width)
         context.set_line_cap(cairo.LINE_CAP_ROUND)
 
-        context.set_source_rgba(0.5, 1, 0, 0.1)
+        context.set_source_rgba(1, 1, 1, 0.1)
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -266,6 +295,8 @@ class ArcGauge(Gauge):
         )
 
         context.stroke()
+
+        super(ArcGauge, self).update(context, value)
 
 
 class Hugin(object):
@@ -308,7 +339,7 @@ class Hugin(object):
                 gauges = self.gauges[source]
 
                 for gauge in gauges:
-                    gauge.update(context, monitor.normalized(gauge.normalize_param))
+                    gauge.update(context, monitor.normalized(gauge.normalize_idx))
 
 
     def start(self):
@@ -317,7 +348,7 @@ class Hugin(object):
             monitor.start()
 
         signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
-        GLib.timeout_add(1000/10, self.tick)
+        GLib.timeout_add(1000/3, self.tick)
         Gtk.main()
         print "Thank you for flying with phryk evil mad sciences, LLC. Please come again."
 
@@ -326,11 +357,20 @@ hugin = Hugin()
 
 
 hugin.gauges['cpu'] = [
-    ArcGauge(x=0, y=0, width=hugin.window.width, height=150, stroke_width=10), # aggregate load
-    ArcGauge(x=0, y=150, width=hugin.window.width / 2, height=100, normalize_param=0), 
-    ArcGauge(x=hugin.window.width/2, y=150, width=hugin.window.width / 2, height=100, normalize_param=1), 
-    ArcGauge(x=0, y=250, width=hugin.window.width / 2, height=100, normalize_param=2), 
-    ArcGauge(x=hugin.window.width/2, y=250, width=hugin.window.width / 2, height=100, normalize_param=3) 
+
+    ArcGauge( # aggregate load
+        x=0,
+        y=0,
+        width=hugin.window.width,
+        height=150,
+        stroke_width=10,
+        captions=[{'text': 'foo!'}]
+    ), 
+
+    ArcGauge(x=0, y=150, width=hugin.window.width / 2, height=100, normalize_idx=0), 
+    ArcGauge(x=hugin.window.width/2, y=150, width=hugin.window.width / 2, height=100, normalize_idx=1), 
+    ArcGauge(x=0, y=250, width=hugin.window.width / 2, height=100, normalize_idx=2), 
+    ArcGauge(x=hugin.window.width/2, y=250, width=hugin.window.width / 2, height=100, normalize_idx=3) 
 ]
 
 hugin.gauges['memory'] = [
