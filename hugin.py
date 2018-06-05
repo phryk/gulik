@@ -33,27 +33,26 @@ def pretty_bytes(bytecount):
 
 
 def render_caption(context, text, x, y, color=None):
-
+    #import pudb; pudb.set_trace()
+    context.translate(x, y)
     if color is None:
-        color = (1,1,1, 0.8)
+        color = (1,1,1, 0.6)
     
     context.set_source_rgba(*color)
     
     font = Pango.FontDescription('Orbitron 14')
 
-    #pango_context = PangoCairo.CairoContext(context)
-    #pango_context.set_antialias(cairo.ANTIALIAS_SUBPIXEL) # such crisp
-
     layout = PangoCairo.create_layout(context)
     layout.set_font_description(font)
     layout.set_text(text, -1)
-    
-    #print pango_context
-    #pango_context.update_layout(layout)
-    #pango_context.show_layout(layout)
+    print "size2: ", layout.get_pixel_size()
+    size = layout.get_pixel_size()
+    context.translate(-size[0] / 2, -size[1] / 2)
 
     PangoCairo.update_layout(context, layout)
     PangoCairo.show_layout(context, layout)
+    context.translate(size[0] / 2, size[1] / 2)
+    context.translate(-x, -y)
 
 
 ##class PeriodicCall(threading.Thread):
@@ -248,7 +247,13 @@ class Gauge(object):
 
         for caption in self.captions:
 
-            render_caption(context, caption['text'], 0, 0)
+            if caption.has_key('position'):
+                position = caption['position']
+
+            else:
+                position = [0, 0]
+
+            render_caption(context, caption['text'], position[0], position[1])
 
 
 class ArcGauge(Gauge):
@@ -364,7 +369,12 @@ hugin.gauges['cpu'] = [
         width=hugin.window.width,
         height=150,
         stroke_width=10,
-        captions=[{'text': 'foo!'}]
+        captions=[
+            {
+                'text': 'CPU aggregate',
+                'position': [100, 80]
+            }
+        ]
     ), 
 
     ArcGauge(x=0, y=150, width=hugin.window.width / 2, height=100, normalize_idx=0), 
