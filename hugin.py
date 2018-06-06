@@ -59,7 +59,7 @@ def alignment_offset(align, size):
     return (x_offset, y_offset)
 
 
-def render_caption(context, text, x, y, align=None, color=None):
+def render_caption(context, text, x, y, align=None, color=None, font_size=None):
     
     if align is None:
         align = 'left_top'
@@ -68,7 +68,11 @@ def render_caption(context, text, x, y, align=None, color=None):
         color = (1,1,1, 0.6)
     
     context.set_source_rgba(*color)
-    font = Pango.FontDescription('Orbitron 14')
+
+    if font_size is None:
+        font_size = 14
+
+    font = Pango.FontDescription('Orbitron %d' % font_size)
 
     layout = PangoCairo.create_layout(context)
     layout.set_font_description(font)
@@ -321,9 +325,10 @@ class Gauge(object):
 
             position = [position[0] + self.x, position[1] + self.y]
 
+
             caption_text = monitor.caption(caption['text'], idx=self.normalize_idx)
 
-            render_caption(context, caption_text, position[0], position[1], align=caption.get('align', None))
+            render_caption(context, caption_text, position[0], position[1], align=caption.get('align', None), font_size=caption.get('font_size', None))
 
 
 class ArcGauge(Gauge):
@@ -441,7 +446,7 @@ hugin.gauges['cpu'] = [
         stroke_width=10,
         captions=[
             {
-                'text': '{:.2f}%',
+                'text': '{:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center'
             }
@@ -456,9 +461,10 @@ hugin.gauges['cpu'] = [
         normalize_idx=0,
         captions=[
             {
-                'text': '{:.2f}%',
+                'text': '{:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
+                'font_size': 10,
             }
         ]
     ),
@@ -471,9 +477,10 @@ hugin.gauges['cpu'] = [
         normalize_idx=1,
         captions=[
             {
-                'text': '{:.2f}%',
+                'text': '{:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
+                'font_size': 10,
             }
         ]
     ),
@@ -486,9 +493,10 @@ hugin.gauges['cpu'] = [
         normalize_idx=2,
         captions=[
             {
-                'text': '{:.2f}%',
+                'text': '{:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
+                'font_size': 10,
             }
         ]
     ),
@@ -501,9 +509,10 @@ hugin.gauges['cpu'] = [
         normalize_idx=3,
         captions=[
             {
-                'text': '{:.2f}%',
+                'text': '{:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
+                'font_size': 10,
             }
         ]
     ) 
@@ -518,7 +527,7 @@ hugin.gauges['memory'] = [
         stroke_width=30,
         captions=[
             {
-                'text': '{percent:.2f}%',
+                'text': '{percent:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center'
             }            
