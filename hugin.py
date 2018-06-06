@@ -441,7 +441,7 @@ hugin.gauges['cpu'] = [
         stroke_width=10,
         captions=[
             {
-                'text': '{:.1f}% aggregate',
+                'text': '{:.2f}%',
                 'position': 'center_center',
                 'align': 'center_center'
             }
@@ -456,16 +456,57 @@ hugin.gauges['cpu'] = [
         normalize_idx=0,
         captions=[
             {
-                'text': 'Core 0',
+                'text': '{:.2f}%',
                 'position': 'center_center',
                 'align': 'center_center',
             }
         ]
     ),
 
-    ArcGauge(x=hugin.window.width/2, y=150, width=hugin.window.width / 2, height=100, normalize_idx=1), 
-    ArcGauge(x=0, y=250, width=hugin.window.width / 2, height=100, normalize_idx=2), 
-    ArcGauge(x=hugin.window.width/2, y=250, width=hugin.window.width / 2, height=100, normalize_idx=3) 
+    ArcGauge(
+        x=hugin.window.width/2,
+        y=150,
+        width=hugin.window.width / 2,
+        height=100,
+        normalize_idx=1,
+        captions=[
+            {
+                'text': '{:.2f}%',
+                'position': 'center_center',
+                'align': 'center_center',
+            }
+        ]
+    ),
+
+    ArcGauge(
+        x=0,
+        y=250,
+        width=hugin.window.width / 2,
+        height=100,
+        normalize_idx=2,
+        captions=[
+            {
+                'text': '{:.2f}%',
+                'position': 'center_center',
+                'align': 'center_center',
+            }
+        ]
+    ),
+
+    ArcGauge(
+        x=hugin.window.width/2,
+        y=250,
+        width=hugin.window.width / 2,
+        height=100,
+        normalize_idx=3,
+        captions=[
+            {
+                'text': '{:.2f}%',
+                'position': 'center_center',
+                'align': 'center_center',
+            }
+        ]
+    ) 
 ]
 
 hugin.gauges['memory'] = [
