@@ -9,6 +9,7 @@ import cairo
 import gi
 
 gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0') # not sure if
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 
@@ -59,7 +60,6 @@ def alignment_offset(align, size):
 
 
 def render_caption(context, text, x, y, align=None, color=None):
-    #import pudb; pudb.set_trace()
     
     if align is None:
         align = 'left_top'
@@ -178,9 +178,13 @@ class CPUCollector(Collector):
 
         aggregate = psutil.cpu_percent(percpu=False)
         percpu = psutil.cpu_percent(percpu=True)
-
-        self.queue_data.put([aggregate, percpu])
-
+        self.queue_data.put(
+            {
+                'aggregate': aggregate, 
+                'percpu': percpu
+            }
+        )
+        
         time.sleep(0.1) # according to psutil docs, there should at least be 0.1 seconds between calls to cpu_percent without interval
 
 
@@ -188,8 +192,10 @@ class MemoryCollector(Collector):
 
     def update(self):
 
-        data = psutil.virtual_memory()
-        self.queue_data.put(data, block=True)
+        self.queue_data.put(
+            psutil.virtual_memory(),
+            block=True
+        )
 
 
 class Monitor(threading.Thread):
@@ -230,6 +236,10 @@ class Monitor(threading.Thread):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
+    def caption(self, fmt, idx=None):
+        raise NotImplementedError("%s.caption not implemented!" % self.__class__.__name__)
+
+
 class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
@@ -237,10 +247,17 @@ class CPUMonitor(Monitor):
 
     def normalized(self, idx=None):
 
-        if len(self.data):
-            if isinstance(idx, int):
-                return self.data[1][idx] / 100.0
-            return self.data[0] / 100.0
+        if isinstance(idx, int):
+            return self.data['percpu'][idx] / 100.0
+        return self.data['aggregate'] / 100.0
+
+
+    def caption(self, fmt, idx=None):
+
+        if isinstance(idx, int):
+            return fmt.format(self.data['percpu'][idx])
+
+        return fmt.format(self.data['aggregate'])
 
 
 class MemoryMonitor(Monitor):
@@ -251,6 +268,10 @@ class MemoryMonitor(Monitor):
     def normalized(self, idx=None):
         if len(self.data):
             return self.data.percent / 100.0
+
+
+    def caption(self, fmt, idx=None):
+        return fmt.format(**self.data._asdict())
 
 
 class Gauge(object):
@@ -274,7 +295,14 @@ class Gauge(object):
         self.captions = captions if captions else list()
 
 
-    def update(self, context, value):
+    def update(self, context, value, monitor):
+
+        """
+        parameters:
+            context: cairo context of the window
+            value: the value to be shown on the gauge, normalized as float 0...1
+            monitor: A Monitor object holding relevant data and helper functions
+        """
 
         for caption in self.captions:
 
@@ -293,7 +321,9 @@ class Gauge(object):
 
             position = [position[0] + self.x, position[1] + self.y]
 
-            render_caption(context, caption['text'], position[0], position[1], align=caption.get('align', None))
+            caption_text = monitor.caption(caption['text'], idx=self.normalize_idx)
+
+            render_caption(context, caption_text, position[0], position[1], align=caption.get('align', None))
 
 
 class ArcGauge(Gauge):
@@ -312,7 +342,7 @@ class ArcGauge(Gauge):
         self.y_center = self.y + self.height / 2
 
 
-    def update(self, context, value):
+    def update(self, context, value, monitor):
        
         context.set_line_width(self.stroke_width)
         #context.set_line_cap(cairo.LINE_CAP_ROUND)
@@ -342,7 +372,7 @@ class ArcGauge(Gauge):
 
         context.stroke()
 
-        super(ArcGauge, self).update(context, value)
+        super(ArcGauge, self).update(context, value, monitor)
 
 
 class Hugin(object):
@@ -384,7 +414,7 @@ class Hugin(object):
                 gauges = self.gauges[source]
 
                 for gauge in gauges:
-                    gauge.update(context, monitor.normalized(gauge.normalize_idx))
+                    gauge.update(context, monitor.normalized(gauge.normalize_idx), monitor)
 
 
     def start(self):
@@ -411,7 +441,7 @@ hugin.gauges['cpu'] = [
         stroke_width=10,
         captions=[
             {
-                'text': 'CPU aggregate',
+                'text': '{:.1f}% aggregate',
                 'position': 'center_center',
                 'align': 'center_center'
             }
@@ -422,7 +452,8 @@ hugin.gauges['cpu'] = [
         x=0,
         y=150,
         width=hugin.window.width / 2,
-        height=100, normalize_idx=0,
+        height=100,
+        normalize_idx=0,
         captions=[
             {
                 'text': 'Core 0',
@@ -438,7 +469,20 @@ hugin.gauges['cpu'] = [
 ]
 
 hugin.gauges['memory'] = [
-    ArcGauge(x=0, y=400, width=hugin.window.width, height=hugin.window.width, stroke_width=30)
+    ArcGauge(
+        x=0,
+        y=400,
+        width=hugin.window.width,
+        height=hugin.window.width,
+        stroke_width=30,
+        captions=[
+            {
+                'text': '{percent:.2f}%',
+                'position': 'center_center',
+                'align': 'center_center'
+            }            
+        ]
+    )
 ]
 
 hugin.start()
