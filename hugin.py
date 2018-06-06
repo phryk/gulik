@@ -32,27 +32,58 @@ def pretty_bytes(bytecount):
     return "%.2f %s" % (value, unit)
 
 
-def render_caption(context, text, x, y, color=None):
+def alignment_offset(align, size):
+
+    x_align, y_align = align.split('_')
+
+    if x_align == 'left':
+        x_offset = 0
+    elif x_align == 'center':
+        x_offset = -size[0] / 2
+    elif x_align == 'right':
+        x_offset = -size[0]
+    else:
+        raise ValueError("unknown horizontal alignment: '%s', must be one of: left, center, right" % x_align)
+
+    if y_align == 'top':
+        y_offset = 0
+    elif y_align == 'center':
+        y_offset = -size[1] / 2
+    elif y_align == 'bottom':
+        y_offset = -size[1]
+    else:
+        raise ValueError("unknown horizontal alignment: '%s', must be one of: top, center, bottom" % y_align)
+
+
+    return (x_offset, y_offset)
+
+
+def render_caption(context, text, x, y, align=None, color=None):
     #import pudb; pudb.set_trace()
-    context.translate(x, y)
+    
+    if align is None:
+        align = 'left_top'
+    
     if color is None:
         color = (1,1,1, 0.6)
     
     context.set_source_rgba(*color)
-    
     font = Pango.FontDescription('Orbitron 14')
 
     layout = PangoCairo.create_layout(context)
     layout.set_font_description(font)
     layout.set_text(text, -1)
-    print "size2: ", layout.get_pixel_size()
+    
     size = layout.get_pixel_size()
-    context.translate(-size[0] / 2, -size[1] / 2)
+
+    x_offset, y_offset = alignment_offset(align, size)
+    
+    context.translate(x + x_offset, y + y_offset)
 
     PangoCairo.update_layout(context, layout)
     PangoCairo.show_layout(context, layout)
-    context.translate(size[0] / 2, size[1] / 2)
-    context.translate(-x, -y)
+
+    context.translate(-x - x_offset, -y - y_offset)
 
 
 ##class PeriodicCall(threading.Thread):
@@ -248,12 +279,21 @@ class Gauge(object):
         for caption in self.captions:
 
             if caption.has_key('position'):
-                position = caption['position']
+
+
+                if isinstance(caption['position'], basestring):
+                    # handle alignment-style strings like "center_bottom"
+                    position = [-x for x in alignment_offset(caption['position'], (self.width, self.height))]
+
+                else:
+                    position = caption['position']
 
             else:
                 position = [0, 0]
 
-            render_caption(context, caption['text'], position[0], position[1])
+            position = [position[0] + self.x, position[1] + self.y]
+
+            render_caption(context, caption['text'], position[0], position[1], align=caption.get('align', None))
 
 
 class ArcGauge(Gauge):
@@ -275,7 +315,8 @@ class ArcGauge(Gauge):
     def update(self, context, value):
        
         context.set_line_width(self.stroke_width)
-        context.set_line_cap(cairo.LINE_CAP_ROUND)
+        #context.set_line_cap(cairo.LINE_CAP_ROUND)
+        context.set_line_cap(cairo.LINE_CAP_BUTT)
 
         context.set_source_rgba(1, 1, 1, 0.1)
         context.arc( # shadow arc
@@ -325,7 +366,6 @@ class Hugin(object):
 
     def tick(self):
 
-        #print "tick"
         for monitor in self.monitors.itervalues():
             monitor.tick()
         self.window.queue_draw()
@@ -372,12 +412,26 @@ hugin.gauges['cpu'] = [
         captions=[
             {
                 'text': 'CPU aggregate',
-                'position': [100, 80]
+                'position': 'center_center',
+                'align': 'center_center'
             }
         ]
     ), 
 
-    ArcGauge(x=0, y=150, width=hugin.window.width / 2, height=100, normalize_idx=0), 
+    ArcGauge(
+        x=0,
+        y=150,
+        width=hugin.window.width / 2,
+        height=100, normalize_idx=0,
+        captions=[
+            {
+                'text': 'Core 0',
+                'position': 'center_center',
+                'align': 'center_center',
+            }
+        ]
+    ),
+
     ArcGauge(x=hugin.window.width/2, y=150, width=hugin.window.width / 2, height=100, normalize_idx=1), 
     ArcGauge(x=0, y=250, width=hugin.window.width / 2, height=100, normalize_idx=2), 
     ArcGauge(x=hugin.window.width/2, y=250, width=hugin.window.width / 2, height=100, normalize_idx=3) 
