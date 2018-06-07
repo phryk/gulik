@@ -315,7 +315,7 @@ class Gauge(object):
 
                 if isinstance(caption['position'], basestring):
                     # handle alignment-style strings like "center_bottom"
-                    position = [-x for x in alignment_offset(caption['position'], (self.width, self.height))]
+                    position = [-x for x in alignment_offset(caption['position'], (self.width - 2 * self.padding, self.height - 2 * self.padding))]
 
                 else:
                     position = caption['position']
@@ -323,7 +323,7 @@ class Gauge(object):
             else:
                 position = [0, 0]
 
-            position = [position[0] + self.x, position[1] + self.y]
+            position = [position[0] + self.x + self.padding, position[1] + self.y + self.padding]
 
 
             caption_text = monitor.caption(caption['text'], idx=self.normalize_idx)
