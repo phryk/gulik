@@ -2,6 +2,7 @@ import math
 import time
 import random
 import signal
+import Queue
 import threading
 import multiprocessing
 import psutil
@@ -9,8 +10,12 @@ import cairo
 import gi
 
 gi.require_version('Gtk', '3.0')
-gi.require_version('PangoCairo', '1.0') # not sure if
+gi.require_version('PangoCairo', '1.0') # not sure if want
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
+
+
+# CONFIG: TODO: Move into its own file, obvsly
+CONFIG_FPS = 3
 
 
 ## Helpers ##
@@ -202,6 +207,19 @@ class MemoryCollector(Collector):
         )
 
 
+class NetworkCollector(Collector):
+
+
+    def update(self):
+
+        counters = psutil.net_io_counters(pernic=True, nowrap=True)
+        sockets = psutil.net_connections(kind='all')
+        self.queue_data.put([counters, sockets])
+
+        psutil.net_io_counters.cache_clear()
+        #self.queue_data.put([{'em0': 420}])
+        #time.sleep(0.1)
+
 class Monitor(threading.Thread):
 
     collector_type = Collector
@@ -236,7 +254,7 @@ class Monitor(threading.Thread):
             self.data = data
 
 
-    def normalize(self, idx=None):
+    def normalized(self, idx=None):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
@@ -247,7 +265,6 @@ class Monitor(threading.Thread):
 class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
-
 
     def normalized(self, idx=None):
 
@@ -268,7 +285,6 @@ class MemoryMonitor(Monitor):
 
     collector_type = MemoryCollector
 
-
     def normalized(self, idx=None):
         if len(self.data):
             return self.data.percent / 100.0
@@ -276,6 +292,32 @@ class MemoryMonitor(Monitor):
 
     def caption(self, fmt, idx=None):
         return fmt.format(**self.data._asdict())
+
+
+class NetworkMonitor(Monitor):
+
+    collector_type = NetworkCollector
+    bandwidth_table = None
+
+
+    def __init__(self):
+
+        super(NetworkMonitor, self).__init__()
+
+        self.bandwidth_table = {}
+
+        for if_name in psutil.net_if_stats().keys():
+                self.bandwidth_table[if_name] = {}
+                for key in ['bytes_sent', 'bytes_recv', 'packets_sent', 'packetsrecv', 'errin', 'errout', 'dropin', 'dropout']:
+                    self.bandwidth_table[if_name][key] = Queue.Queue(maxsize=CONFIG_FPS)
+
+
+    def normalized(self, idx=None):
+        if len(self.data):
+            #print self.data[0]['em0'].bytes_recv
+            return self.data[0]['em0'].bytes_recv / 1000000000.0 / 8.0
+            #return self.data[0]['em0'] / 1000.0
+            #return 0.5
 
 
 class Gauge(object):
@@ -395,6 +437,7 @@ class Hugin(object):
         self.monitors = {}
         self.monitors['cpu'] = CPUMonitor()
         self.monitors['memory'] = MemoryMonitor()
+        self.monitors['network'] = NetworkMonitor()
 
         self.gauges = {}
 
@@ -428,7 +471,7 @@ class Hugin(object):
             monitor.start()
 
         signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
-        GLib.timeout_add(1000/3, self.tick)
+        GLib.timeout_add(1000/CONFIG_FPS, self.tick)
         Gtk.main()
         print "Thank you for flying with phryk evil mad sciences, LLC. Please come again."
 
@@ -470,7 +513,7 @@ hugin.gauges['cpu'] = [
     ),
 
     ArcGauge(
-        x=hugin.window.width/2,
+        x=hugin.window.width / 2,
         y=150,
         width=hugin.window.width / 2,
         height=100,
@@ -502,7 +545,7 @@ hugin.gauges['cpu'] = [
     ),
 
     ArcGauge(
-        x=hugin.window.width/2,
+        x=hugin.window.width / 2,
         y=250,
         width=hugin.window.width / 2,
         height=100,
@@ -532,6 +575,16 @@ hugin.gauges['memory'] = [
                 'align': 'center_center'
             }            
         ]
+    )
+]
+
+hugin.gauges['network'] = [
+    ArcGauge(
+        x=0,
+        y=600,
+        width=hugin.window.width,
+        height=hugin.window.width,
+        #normalize_idx='bytes_recv'
     )
 ]
 
