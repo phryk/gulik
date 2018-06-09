@@ -2,7 +2,7 @@ import math
 import time
 import random
 import signal
-import Queue
+import collections
 import threading
 import multiprocessing
 import psutil
@@ -217,7 +217,7 @@ class NetworkCollector(Collector):
         self.queue_data.put([counters, sockets])
 
         psutil.net_io_counters.cache_clear()
-        #self.queue_data.put([{'em0': 420}])
+        #self.queue_data.put([{'re0': 420}])
         #time.sleep(0.1)
 
 class Monitor(threading.Thread):
@@ -297,27 +297,50 @@ class MemoryMonitor(Monitor):
 class NetworkMonitor(Monitor):
 
     collector_type = NetworkCollector
-    bandwidth_table = None
+    interfaces = None
 
 
     def __init__(self):
 
         super(NetworkMonitor, self).__init__()
 
-        self.bandwidth_table = {}
+        self.interfaces = collections.OrderedDict()
 
         for if_name in psutil.net_if_stats().keys():
-                self.bandwidth_table[if_name] = {}
-                for key in ['bytes_sent', 'bytes_recv', 'packets_sent', 'packetsrecv', 'errin', 'errout', 'dropin', 'dropout']:
-                    self.bandwidth_table[if_name][key] = Queue.Queue(maxsize=CONFIG_FPS)
+                self.interfaces[if_name] = {}
+                self.interfaces[if_name]['counts'] = {}
+                for key in ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']:
+                    self.interfaces[if_name]['counts'][key] = collections.deque([], CONFIG_FPS) # max size equal fps means this holds data of only the last second
+
+
+    def run(self):
+
+        while self.collector.is_alive():
+            data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+            self.data = data
+            for if_name, if_info in self.interfaces.iteritems():
+                for key, deque in if_info['counts'].iteritems():
+                    deque.append(self.data[0][if_name]._asdict()[key])
+
+
+    def count_sec(self, interface, key):
+
+        """
+            get a specified count for a given interface as calculated for the last second
+            EXAMPLE: self.count_sec('eth0', 'bytes_sent') will return count of bytes sent in the last second
+        """
+
+        deque = self.interfaces[interface]['counts'][key]
+        return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
 
 
     def normalized(self, idx=None):
         if len(self.data):
-            #print self.data[0]['em0'].bytes_recv
-            return self.data[0]['em0'].bytes_recv / 1000000000.0 / 8.0
-            #return self.data[0]['em0'] / 1000.0
+            #print self.data[0]['re0'].bytes_recv
+            #return self.data[0]['re0'].bytes_recv / 10000000.0 / 8.0
+            #return self.data[0]['re0'] / 1000.0
             #return 0.5
+            return self.count_sec('re0', 'bytes_recv') / (1000000000.0 / 8.0)
 
 
 class Gauge(object):
