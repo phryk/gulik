@@ -30,7 +30,7 @@ def pretty_bytes(bytecount):
     Return a human readable representation given a size in bytes.
     """
 
-    units = ['Byte', 'Kbyte', 'Mbyte', 'Gbyte', 'Tbyte']
+    units = ['Byte', 'kbyte', 'Mbyte', 'Gbyte', 'Tbyte']
 
     value = bytecount
     for unit in units:
@@ -48,7 +48,7 @@ def pretty_bits(bytecount):
     Return a human readable representation given a size in bytes.
     """
 
-    units = ['Bit', 'Kbit', 'Mbit', 'Gbit', 'Tbit']
+    units = ['bit', 'kbit', 'Mbit', 'Gbit', 'Tbit']
 
     value = bytecount * 8 # bytes to bits
     for unit in units:
@@ -239,8 +239,8 @@ class NetworkCollector(Collector):
         self.queue_data.put([counters, sockets])
 
         psutil.net_io_counters.cache_clear()
-        #self.queue_data.put([{'em0': 420}])
         #time.sleep(0.1)
+
 
 class Monitor(threading.Thread):
 
@@ -396,6 +396,16 @@ class Gauge(object):
         self.captions = captions if captions else list()
 
 
+    @property
+    def inner_width(self):
+        return self.width - 2 * self.padding
+
+
+    @property
+    def inner_height(self):
+        return self.height - 2 * self.padding
+
+
     def update(self, context, monitor):
 
         """
@@ -480,17 +490,31 @@ class PlotGauge(Gauge):
 
     points = None
     num_points = None
+    autoscale = None
 
-    def __init__(self, num_points=None, **kwargs):
+    def __init__(self, num_points=None, autoscale=True, **kwargs):
 
         super(PlotGauge, self).__init__(**kwargs)
 
         if num_points:
             self.num_points = num_points
         else:
-            self.num_points = self.width / 8
+            self.num_points = self.inner_width / 8 + 1
 
         self.points = collections.deque([], self.num_points)
+
+        self.autoscale = autoscale
+
+
+    @property
+    def points_scaled(self):
+        
+        scale_factor = max(self.points)
+        r = []
+        for amplitude in self.points:
+            r.append(amplitude / scale_factor)
+
+        return r
 
 
     def update(self, context, monitor):
@@ -499,14 +523,19 @@ class PlotGauge(Gauge):
         
         context.set_line_width(2)
         context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
-        context.rectangle(self.x, self.y, self.width, self.height)
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.fill()
 
         coords = []
-        for idx, amplitude in enumerate(self.points):
+        if self.autoscale:
+            points = self.points_scaled
+        else:
+            points = self.points
+
+        for idx, amplitude in enumerate(points):
             coords.append((
-                idx * 8,
-                self.y + self.height - (self.height * amplitude)
+                idx * 8 + self.padding,
+                self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
         context.set_source_rgba(*CONFIG_COLORS['highlight'])
@@ -680,14 +709,6 @@ hugin.gauges['cpu'] = [
             }
         ]
     ), 
-
-    PlotGauge(
-        x=0,
-        y=800,
-        width=hugin.window.width,
-        height=100,
-        normalize_idx='em0'
-    )
 ]
 
 hugin.gauges['memory'] = [
@@ -713,7 +734,7 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        normalize_idx='em0',
+        normalize_idx='re0',
         captions=[
             {
                 'text': '{bytes_recv}/s',
@@ -722,6 +743,15 @@ hugin.gauges['network'] = [
             }
         ]
     ),
+
+    PlotGauge(
+        x=0,
+        y=800,
+        width=hugin.window.width,
+        height=100,
+        padding=15,
+        normalize_idx='re0'
+    )
 ]
 
 hugin.start()
