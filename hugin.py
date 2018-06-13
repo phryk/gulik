@@ -16,7 +16,11 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 # CONFIG: TODO: Move into its own file, obvsly
 CONFIG_FPS = 3
-
+CONFIG_COLORS = {
+    'window_background': (0,0,0, 0.6),
+    'gauge_background': (1,1,1, 0.1),
+    'highlight': (0.5, 1, 0, 0.6),
+}
 
 ## Helpers ##
 
@@ -26,9 +30,27 @@ def pretty_bytes(bytecount):
     Return a human readable representation given a size in bytes.
     """
 
-    units = ['Byte', 'Kilobuns', 'Megabuns', 'Gigabuns', 'Terabuns']
+    units = ['Byte', 'Kbyte', 'Mbyte', 'Gbyte', 'Tbyte']
 
     value = bytecount
+    for unit in units:
+        if value / 1024.0 < 1:
+            break
+
+        value /= 1024.0
+
+    return "%.2f %s" % (value, unit)
+
+
+def pretty_bits(bytecount):
+
+    """
+    Return a human readable representation given a size in bytes.
+    """
+
+    units = ['Bit', 'Kbit', 'Mbit', 'Gbit', 'Tbit']
+
+    value = bytecount * 8 # bytes to bits
     for unit in units:
         if value / 1024.0 < 1:
             break
@@ -217,7 +239,7 @@ class NetworkCollector(Collector):
         self.queue_data.put([counters, sockets])
 
         psutil.net_io_counters.cache_clear()
-        #self.queue_data.put([{'re0': 420}])
+        #self.queue_data.put([{'em0': 420}])
         #time.sleep(0.1)
 
 class Monitor(threading.Thread):
@@ -336,11 +358,21 @@ class NetworkMonitor(Monitor):
 
     def normalized(self, idx=None):
         if len(self.data):
-            #print self.data[0]['re0'].bytes_recv
-            #return self.data[0]['re0'].bytes_recv / 10000000.0 / 8.0
-            #return self.data[0]['re0'] / 1000.0
-            #return 0.5
-            return self.count_sec('re0', 'bytes_recv') / (1000000000.0 / 8.0)
+            return self.count_sec(idx, 'bytes_recv') / (1000000000.0 / 8.0)
+
+
+    def caption(self, fmt, idx=None):
+ 
+        if self.interfaces.has_key(idx) and self.interfaces[idx].has_key('counts'):
+            data = {}
+            for k in self.interfaces[idx]['counts'].keys():
+
+                data[k] = self.count_sec(idx, k)
+                if k.startswith('bytes'):
+                    data[k] = pretty_bits(data[k])
+
+
+            return fmt.format(**data)
 
 
 class Gauge(object):
@@ -364,12 +396,11 @@ class Gauge(object):
         self.captions = captions if captions else list()
 
 
-    def update(self, context, value, monitor):
+    def update(self, context, monitor):
 
         """
         parameters:
             context: cairo context of the window
-            value: the value to be shown on the gauge, normalized as float 0...1
             monitor: A Monitor object holding relevant data and helper functions
         """
 
@@ -412,13 +443,13 @@ class ArcGauge(Gauge):
         self.y_center = self.y + self.height / 2
 
 
-    def update(self, context, value, monitor):
-       
+    def update(self, context, monitor):
+
         context.set_line_width(self.stroke_width)
         #context.set_line_cap(cairo.LINE_CAP_ROUND)
         context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        context.set_source_rgba(1, 1, 1, 0.1)
+        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -430,19 +461,82 @@ class ArcGauge(Gauge):
         context.stroke()
         
 
-        context.set_source_rgba(0.5, 1, 0, 0.6)
+        context.set_source_rgba(*CONFIG_COLORS['highlight'])
 
         context.arc(
             self.x_center,
             self.y_center,
             self.radius,
             math.pi / 2,
-            math.pi / 2 + math.pi * 2 * value
+            math.pi / 2 + math.pi * 2 * monitor.normalized(self.normalize_idx)
         )
 
         context.stroke()
 
-        super(ArcGauge, self).update(context, value, monitor)
+        super(ArcGauge, self).update(context, monitor)
+
+
+class PlotGauge(Gauge):
+
+    points = None
+    num_points = None
+
+    def __init__(self, num_points=None, **kwargs):
+
+        super(PlotGauge, self).__init__(**kwargs)
+
+        if num_points:
+            self.num_points = num_points
+        else:
+            self.num_points = self.width / 8
+
+        self.points = collections.deque([], self.num_points)
+
+
+    def update(self, context, monitor):
+            
+        self.points.append(monitor.normalized(self.normalize_idx))
+        
+        context.set_line_width(2)
+        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
+        context.rectangle(self.x, self.y, self.width, self.height)
+        context.fill()
+
+        coords = []
+        for idx, amplitude in enumerate(self.points):
+            coords.append((
+                idx * 8,
+                self.y + self.height - (self.height * amplitude)
+            ))
+      
+        context.set_source_rgba(*CONFIG_COLORS['highlight'])
+        context.set_line_width(2)
+        #context.set_line_cap(cairo.LINE_CAP_BUTT)
+        # draw lines
+        for idx, (x, y) in enumerate(coords):
+            if idx == 0:
+                context.move_to(x, y)
+            else:
+                context.line_to(x, y)
+
+        context.stroke()
+
+        # place points
+        for (x, y) in coords:
+
+            context.set_source_rgba(*CONFIG_COLORS['highlight'])
+
+            context.arc(
+                x,
+                y,
+                2,
+                0,
+                2 * math.pi
+            )
+        
+            context.fill()
+
+        super(PlotGauge, self).update(context, monitor)
 
 
 class Hugin(object):
@@ -479,13 +573,17 @@ class Hugin(object):
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
 
+        context.set_source_rgba(*CONFIG_COLORS['window_background'])
+        context.rectangle(0, 0, self.window.width, self.window.height)
+        context.fill()
+
         for source, monitor in self.monitors.iteritems():
 
             if len(monitor.data) and self.gauges.has_key(source):
                 gauges = self.gauges[source]
 
                 for gauge in gauges:
-                    gauge.update(context, monitor.normalized(gauge.normalize_idx), monitor)
+                    gauge.update(context, monitor)
 
 
     def start(self):
@@ -581,7 +679,15 @@ hugin.gauges['cpu'] = [
                 'font_size': 10,
             }
         ]
-    ) 
+    ), 
+
+    PlotGauge(
+        x=0,
+        y=800,
+        width=hugin.window.width,
+        height=100,
+        normalize_idx='em0'
+    )
 ]
 
 hugin.gauges['memory'] = [
@@ -596,7 +702,7 @@ hugin.gauges['memory'] = [
                 'text': '{percent:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center'
-            }            
+            }
         ]
     )
 ]
@@ -607,8 +713,15 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        #normalize_idx='bytes_recv'
-    )
+        normalize_idx='em0',
+        captions=[
+            {
+                'text': '{bytes_recv}/s',
+                'position': 'center_center',
+                'align': 'center_center',
+            }
+        ]
+    ),
 ]
 
 hugin.start()
