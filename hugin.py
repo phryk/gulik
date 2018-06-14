@@ -236,7 +236,8 @@ class NetworkCollector(Collector):
 
         counters = psutil.net_io_counters(pernic=True, nowrap=True)
         sockets = psutil.net_connections(kind='all')
-        self.queue_data.put([counters, sockets])
+        stats = psutil.net_if_stats()
+        self.queue_data.put([counters, sockets, stats])
 
         psutil.net_io_counters.cache_clear()
         #time.sleep(0.1)
@@ -358,7 +359,13 @@ class NetworkMonitor(Monitor):
 
     def normalized(self, idx=None):
         if len(self.data):
-            return self.count_sec(idx, 'bytes_recv') / (1000000000.0 / 8.0)
+
+            if self.data[2][idx].speed:
+                link_quality = float(self.data[2][idx].speed * 1024**2)
+            else:
+                link_quality = float(100 * 1024**2)
+
+            return (self.count_sec(idx, 'bytes_recv') * 8) / link_quality
 
 
     def caption(self, fmt, idx=None):
@@ -510,6 +517,11 @@ class PlotGauge(Gauge):
     def points_scaled(self):
         
         scale_factor = max(self.points)
+
+        if scale_factor == 0.0:
+            print "zero"
+            return [0.0 for _ in range(0, len(self.points))]
+
         r = []
         for amplitude in self.points:
             r.append(amplitude / scale_factor)
