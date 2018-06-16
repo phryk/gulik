@@ -207,10 +207,12 @@ class CPUCollector(Collector):
 
     def update(self):
 
+        count = psutil.cpu_count()
         aggregate = psutil.cpu_percent(percpu=False)
         percpu = psutil.cpu_percent(percpu=True)
         self.queue_data.put(
             {
+                'count': count,
                 'aggregate': aggregate, 
                 'percpu': percpu
             }
@@ -231,16 +233,21 @@ class MemoryCollector(Collector):
 
 class NetworkCollector(Collector):
 
-
     def update(self):
 
-        counters = psutil.net_io_counters(pernic=True, nowrap=True)
-        sockets = psutil.net_connections(kind='all')
         stats = psutil.net_if_stats()
-        self.queue_data.put([counters, sockets, stats])
+        addrs = psutil.net_if_addrs()
+        counters = psutil.net_io_counters(pernic=True, nowrap=True)
+        connections = psutil.net_connections(kind='all')
 
-        psutil.net_io_counters.cache_clear()
-        #time.sleep(0.1)
+        self.queue_data.put({
+            'stats': stats,
+            'addrs': addrs,
+            'counters': counters,
+            'connections': connections,
+        })
+
+        #psutil.net_io_counters.cache_clear()
 
 
 class Monitor(threading.Thread):
@@ -277,11 +284,11 @@ class Monitor(threading.Thread):
             self.data = data
 
 
-    def normalized(self, idx=None):
+    def normalized(self, address=None):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
-    def caption(self, fmt, idx=None):
+    def caption(self, fmt):
         raise NotImplementedError("%s.caption not implemented!" % self.__class__.__name__)
 
 
@@ -289,32 +296,42 @@ class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
 
-    def normalized(self, idx=None):
+    def normalized(self, address=None):
 
-        if isinstance(idx, int):
-            return self.data['percpu'][idx] / 100.0
+        if isinstance(address, int):
+            return self.data['percpu'][address] / 100.0
         return self.data['aggregate'] / 100.0
 
 
-    def caption(self, fmt, idx=None):
+    def caption(self, fmt):
+        
+        data = {}
+        data['count'] = self.data['count']
+        data['aggregate'] = self.data['aggregate']
+        for idx, perc in enumerate(self.data['percpu']):
+            data['core_%d' % idx] = perc
 
-        if isinstance(idx, int):
-            return fmt.format(self.data['percpu'][idx])
-
-        return fmt.format(self.data['aggregate'])
-
+        return fmt.format(**data)
 
 class MemoryMonitor(Monitor):
 
     collector_type = MemoryCollector
 
-    def normalized(self, idx=None):
+    def normalized(self, address=None):
         if len(self.data):
             return self.data.percent / 100.0
 
 
-    def caption(self, fmt, idx=None):
-        return fmt.format(**self.data._asdict())
+    def caption(self, fmt):
+
+        data = {}
+        for k, v in self.data._asdict().iteritems():
+            if k != 'percent':
+                v = pretty_bytes(v)
+
+            data[k] = v
+
+        return fmt.format(**data)
 
 
 class NetworkMonitor(Monitor):
@@ -329,11 +346,18 @@ class NetworkMonitor(Monitor):
 
         self.interfaces = collections.OrderedDict()
 
+        if CONFIG_FPS < 2:
+            deque_len = 2
+        else:
+            deque_len = CONFIG_FPS
+        
         for if_name in psutil.net_if_stats().keys():
                 self.interfaces[if_name] = {}
-                self.interfaces[if_name]['counts'] = {}
+                self.interfaces[if_name]['addrs'] = {}
+                self.interfaces[if_name]['stats'] = {}
+                self.interfaces[if_name]['counters'] = {}
                 for key in ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']:
-                    self.interfaces[if_name]['counts'][key] = collections.deque([], CONFIG_FPS) # max size equal fps means this holds data of only the last second
+                    self.interfaces[if_name]['counters'][key] = collections.deque([], deque_len) # max size equal fps means this holds data of only the last second
 
 
     def run(self):
@@ -342,8 +366,12 @@ class NetworkMonitor(Monitor):
             data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
             self.data = data
             for if_name, if_info in self.interfaces.iteritems():
-                for key, deque in if_info['counts'].iteritems():
-                    deque.append(self.data[0][if_name]._asdict()[key])
+                
+                for key, deque in if_info['counters'].iteritems():
+                    deque.append(self.data['counters'][if_name]._asdict()[key])
+                
+                self.interfaces[if_name]['stats'] = self.data['stats'][if_name]._asdict()
+                self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
 
 
     def count_sec(self, interface, key):
@@ -353,33 +381,47 @@ class NetworkMonitor(Monitor):
             EXAMPLE: self.count_sec('eth0', 'bytes_sent') will return count of bytes sent in the last second
         """
 
-        deque = self.interfaces[interface]['counts'][key]
-        return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
+        deque = self.interfaces[interface]['counters'][key]
+        
+        if CONFIG_FPS < 2:
+            return (deque[-1] - deque[0]) / CONFIG_FPS # fps < 1 means data covers 1/fps seconds
+
+        else:
+            return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
 
 
-    def normalized(self, idx=None):
+    def normalized(self, address=None):
+
+        if_name, key = address.split('.')
+
         if len(self.data):
 
-            if self.data[2][idx].speed:
-                link_quality = float(self.data[2][idx].speed * 1024**2)
-            else:
+            if self.interfaces[if_name]['stats']['speed']:
+                link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
+            else: # speed == 0 means it couldn't be determined, fall back to 100Mbit/s
                 link_quality = float(100 * 1024**2)
 
-            return (self.count_sec(idx, 'bytes_recv') * 8) / link_quality
+            return (self.count_sec(if_name, key) * 8) / link_quality
 
 
-    def caption(self, fmt, idx=None):
- 
-        if self.interfaces.has_key(idx) and self.interfaces[idx].has_key('counts'):
-            data = {}
-            for k in self.interfaces[idx]['counts'].keys():
+    def caption(self, fmt):
+        
+        data = {}
 
-                data[k] = self.count_sec(idx, k)
+        for if_name in self.interfaces.keys():
+
+            data[if_name] = {}
+            data[if_name]['addrs'] = self.interfaces[if_name]['addrs']
+            data[if_name]['stats'] = self.interfaces[if_name]['stats']
+
+            data[if_name]['counters'] = {}
+            for k in self.interfaces[if_name]['counters'].keys():
+
+                data[if_name]['counters'][k] = self.count_sec(if_name, k)
                 if k.startswith('bytes'):
-                    data[k] = pretty_bits(data[k])
+                    data[if_name]['counters'][k] = pretty_bits(data[if_name]['counters'][k])
 
-
-            return fmt.format(**data)
+        return fmt.format(**data)
 
 
 class Gauge(object):
@@ -389,17 +431,17 @@ class Gauge(object):
     width = None
     height = None
     padding = None
-    normalize_idx = None
+    address = None
     captions = None
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, normalize_idx=None, captions=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None):
 
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.padding = padding
-        self.normalize_idx = normalize_idx
+        self.address = address
         self.captions = captions if captions else list()
 
 
@@ -439,7 +481,7 @@ class Gauge(object):
             position = [position[0] + self.x + self.padding, position[1] + self.y + self.padding]
 
 
-            caption_text = monitor.caption(caption['text'], idx=self.normalize_idx)
+            caption_text = monitor.caption(caption['text'])
 
             render_caption(context, caption_text, position[0], position[1], align=caption.get('align', None), font_size=caption.get('font_size', None))
 
@@ -463,7 +505,6 @@ class ArcGauge(Gauge):
     def update(self, context, monitor):
 
         context.set_line_width(self.stroke_width)
-        #context.set_line_cap(cairo.LINE_CAP_ROUND)
         context.set_line_cap(cairo.LINE_CAP_BUTT)
 
         context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
@@ -476,18 +517,57 @@ class ArcGauge(Gauge):
         )
         
         context.stroke()
-        
 
         context.set_source_rgba(*CONFIG_COLORS['highlight'])
-
         context.arc(
             self.x_center,
             self.y_center,
             self.radius,
             math.pi / 2,
-            math.pi / 2 + math.pi * 2 * monitor.normalized(self.normalize_idx)
+            math.pi / 2 + math.pi * 2 * monitor.normalized(self.address)
         )
 
+        context.stroke()
+
+        super(ArcGauge, self).update(context, monitor)
+
+
+class DualArcGauge(ArcGauge):
+
+    def update(self, context, monitor):
+
+        context.set_line_width(self.stroke_width)
+        context.set_line_cap(cairo.LINE_CAP_BUTT)
+
+        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
+        context.arc( # shadow arc
+            self.x_center,
+            self.y_center,
+            self.radius,
+            0,
+            math.pi * 2
+        )
+        context.stroke()
+
+
+        context.set_source_rgba(*CONFIG_COLORS['highlight'])
+        context.arc(
+            self.x_center,
+            self.y_center,
+            self.radius,
+            math.pi / 2,
+            math.pi / 2 + math.pi * monitor.normalized(self.address[0])
+        )
+        context.stroke()
+
+        context.set_source_rgba(1,0,0.5, 0.6)
+        context.arc_negative(
+            self.x_center,
+            self.y_center,
+            self.radius,
+            math.pi / 2,
+            math.pi / 2 - math.pi * monitor.normalized(self.address[1])
+        )
         context.stroke()
 
         super(ArcGauge, self).update(context, monitor)
@@ -519,7 +599,6 @@ class PlotGauge(Gauge):
         scale_factor = max(self.points)
 
         if scale_factor == 0.0:
-            print "zero"
             return [0.0 for _ in range(0, len(self.points))]
 
         r = []
@@ -531,7 +610,7 @@ class PlotGauge(Gauge):
 
     def update(self, context, monitor):
             
-        self.points.append(monitor.normalized(self.normalize_idx))
+        self.points.append(monitor.normalized(self.address))
         
         context.set_line_width(2)
         context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
@@ -629,6 +708,9 @@ class Hugin(object):
 
     def start(self):
 
+        assert CONFIG_FPS != 0
+        assert isinstance(CONFIG_FPS, float) or CONFIG_FPS >= 1
+
         for monitor in self.monitors.itervalues():
             monitor.start()
 
@@ -651,7 +733,7 @@ hugin.gauges['cpu'] = [
         stroke_width=10,
         captions=[
             {
-                'text': '{:.1f}%',
+                'text': '{aggregate:.1f}% on {count} cores',
                 'position': 'center_center',
                 'align': 'center_center'
             }
@@ -663,10 +745,10 @@ hugin.gauges['cpu'] = [
         y=150,
         width=hugin.window.width / 2,
         height=100,
-        normalize_idx=0,
+        address=0,
         captions=[
             {
-                'text': '{:.1f}%',
+                'text': '{core_0:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
                 'font_size': 10,
@@ -679,10 +761,10 @@ hugin.gauges['cpu'] = [
         y=150,
         width=hugin.window.width / 2,
         height=100,
-        normalize_idx=1,
+        address=1,
         captions=[
             {
-                'text': '{:.1f}%',
+                'text': '{core_1:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
                 'font_size': 10,
@@ -695,10 +777,10 @@ hugin.gauges['cpu'] = [
         y=250,
         width=hugin.window.width / 2,
         height=100,
-        normalize_idx=2,
+        address=2,
         captions=[
             {
-                'text': '{:.1f}%',
+                'text': '{core_2:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
                 'font_size': 10,
@@ -711,10 +793,10 @@ hugin.gauges['cpu'] = [
         y=250,
         width=hugin.window.width / 2,
         height=100,
-        normalize_idx=3,
+        address=3,
         captions=[
             {
-                'text': '{:.1f}%',
+                'text': '{core_3:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center',
                 'font_size': 10,
@@ -735,21 +817,28 @@ hugin.gauges['memory'] = [
                 'text': '{percent:.1f}%',
                 'position': 'center_center',
                 'align': 'center_center'
+            },
+
+            {
+                'text': '{total}',
+                'position': 'left_top',
+                'align': 'left_top',
+                'font_size': 8,
             }
         ]
     )
 ]
 
 hugin.gauges['network'] = [
-    ArcGauge(
+    DualArcGauge(
         x=0,
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        normalize_idx='re0',
+        address=['re0.bytes_recv', 're0.bytes_sent'],
         captions=[
             {
-                'text': '{bytes_recv}/s',
+                'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
                 'position': 'center_center',
                 'align': 'center_center',
             }
@@ -762,7 +851,16 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        normalize_idx='re0'
+        address='re0.bytes_recv'
+    ),
+    
+    PlotGauge(
+        x=0,
+        y=900,
+        width=hugin.window.width,
+        height=100,
+        padding=15,
+        address='re0.bytes_sent'
     )
 ]
 
