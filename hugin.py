@@ -1,3 +1,6 @@
+#!/usr/bin/env python2.7
+# -*- coding: utf-8 -*-
+
 import math
 import time
 import random
@@ -6,21 +9,13 @@ import collections
 import threading
 import multiprocessing
 import psutil
+import colorsys
 import cairo
 import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0') # not sure if want
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
-
-
-# CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 3
-CONFIG_COLORS = {
-    'window_background': (0,0,0, 0.6),
-    'gauge_background': (1,1,1, 0.1),
-    'highlight': (0.5, 1, 0, 0.6),
-}
 
 ## Helpers ##
 
@@ -36,7 +31,8 @@ class Color(object):
 
     alpha = None
 
-    def __init__(self, red=None, green=None, blue=None, hue=None, saturation=None, value=None, alpha=None):
+
+    def __init__(self, red=None, green=None, blue=None, alpha=None, hue=None, saturation=None, value=None):
 
         rgb_passed = bool(red)|bool(green)|bool(blue)
         hsv_passed = bool(hue)|bool(saturation)|bool(value)
@@ -81,8 +77,8 @@ class Color(object):
     def __setattr__(self, key, value):
 
         if key in ('red', 'green', 'blue'):
-            if value > 255.0:
-                value = value % 255.0
+            if value > 1.0:
+                value = value % 1.0
             super(Color, self).__setattr__(key, value)
             self._update_hsv()
 
@@ -115,12 +111,8 @@ class Color(object):
             )
 
 
-    def __str__(self):
-        return "%d %d %d" % (
-            int(round(self.red * self.alpha)),
-            int(round(self.green * self.alpha)),
-            int(round(self.blue * self.alpha)),
-        )
+    def clone(self):
+        return Color(red=self.red, green=self.green, blue=self.blue, alpha=self.alpha)
 
 
     def blend(self, other, mode='normal'):
@@ -155,14 +147,14 @@ class Color(object):
         green = self.green + (other.green * other.alpha)
         blue = self.blue + (other.blue * other.alpha)
 
-        if red > 255.0:
-            red = 255.0
+        if red > 1.0:
+            red = 1.0
 
-        if green > 255.0:
-            green = 255.0
+        if green > 1.0:
+            green = 1.0
 
-        if blue > 255.0:
-            blue = 255.0
+        if blue > 1.0:
+            blue = 1.0
 
         self.red = red
         self.green = green
@@ -191,28 +183,20 @@ class Color(object):
         self.green = green
         self.blue = blue
 
-    
-    def hex_rgb(self):
-        return "%.2X%.2X%.2X" % (self.red, self.green, self.blue)
-    
-    
-    def hex_rgba(self):
-        return "%.2X%.2X%.2X%.2X" % (self.red, self.green, self.blue, self.alpha * 255)
-
 
     def tuple_rgb(self):
         """ return color (without alpha) as tuple, channels being float 0.0-1.0 """
-        return (self.red/255.0, self.green/255.0, self.blue/255.0)
+        return (self.red, self.green, self.blue)
     
     
     def tuple_rgba(self):
         """ return color (*with* alpha) as tuple, channels being float 0.0-1.0 """
-        return (self.red/255.0, self.green/255.0, self.blue/255.0, self.alpha)
+        return (self.red, self.green, self.blue, self.alpha)
 
 
     def _update_hsv(self):
 
-        hue, saturation, value = colorsys.rgb_to_hsv(self.red/255.0, self.green/255.0, self.blue/255.0)
+        hue, saturation, value = colorsys.rgb_to_hsv(self.red, self.green, self.blue)
         super(Color, self).__setattr__('hue', hue * 360.0)
         super(Color, self).__setattr__('saturation', saturation)
         super(Color, self).__setattr__('value', value)
@@ -221,9 +205,11 @@ class Color(object):
     def _update_rgb(self):
 
         red, green, blue = colorsys.hsv_to_rgb(self.hue / 360.0, self.saturation, self.value)
-        super(Color, self).__setattr__('red', red * 255.0)
-        super(Color, self).__setattr__('green', green * 255.0)
-        super(Color, self).__setattr__('blue', blue * 255.0)
+        super(Color, self).__setattr__('red', red)
+        super(Color, self).__setattr__('green', green)
+        super(Color, self).__setattr__('blue', blue)
+
+
 def pretty_bytes(bytecount):
 
     """
@@ -341,6 +327,15 @@ def render_caption(context, text, x, y, align=None, color=None, font_size=None):
 #            self.target()
 #            time.sleep(self.interval)
 
+# CONFIG: TODO: Move into its own file, obvsly
+CONFIG_FPS = 3
+CONFIG_COLORS = {
+    'window_background': Color(0,0,0, 0.6),
+    'gauge_background': Color(1,1,1, 0.1),
+    'highlight': Color(0.5, 1, 0, 0.6),
+}
+
+## HUGIN ##
 
 class Window(Gtk.Window):
 
@@ -633,8 +628,9 @@ class Gauge(object):
     padding = None
     address = None
     captions = None
+    colors = None
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None, foreground=None, background=None):
 
         self.x = x
         self.y = y
@@ -643,6 +639,18 @@ class Gauge(object):
         self.padding = padding
         self.address = address
         self.captions = captions if captions else list()
+
+        self.colors = {}
+
+        if foreground is None:
+            self.colors['foreground'] = CONFIG_COLORS['highlight']
+        else:
+            self.colors['foreground'] = foreground
+
+        if background is None:
+            self.colors['background'] = CONFIG_COLORS['gauge_background']
+        else:
+            self.colors['background'] = background
 
 
     @property
@@ -707,7 +715,7 @@ class ArcGauge(Gauge):
         context.set_line_width(self.stroke_width)
         context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -718,7 +726,7 @@ class ArcGauge(Gauge):
         
         context.stroke()
 
-        context.set_source_rgba(*CONFIG_COLORS['highlight'])
+        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
         context.arc(
             self.x_center,
             self.y_center,
@@ -739,7 +747,7 @@ class DualArcGauge(ArcGauge):
         context.set_line_width(self.stroke_width)
         context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -750,7 +758,7 @@ class DualArcGauge(ArcGauge):
         context.stroke()
 
 
-        context.set_source_rgba(*CONFIG_COLORS['highlight'])
+        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
         context.arc(
             self.x_center,
             self.y_center,
@@ -792,6 +800,15 @@ class PlotGauge(Gauge):
 
         self.autoscale = autoscale
 
+        self.colors['grid_major'] = self.colors['foreground'].clone()
+        self.colors['grid_major'].alpha *= 0.8
+
+        self.colors['grid_minor'] = self.colors['background'].clone()
+        self.colors['grid_minor'].alpha *= 0.8
+
+        self.colors['grid_milli'] = self.colors['background'].clone()
+        self.colors['grid_milli'].alpha *= 0.4
+
 
     def get_scale_factor(self):
         p = max(self.points)
@@ -818,7 +835,7 @@ class PlotGauge(Gauge):
         scale_factor = self.get_scale_factor()
 
         context.set_line_width(1)
-        context.set_source_rgba(1,1,1, 0.1)
+        context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
         #context.set_dash([1,1])
 
         for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, 8):
@@ -842,7 +859,6 @@ class PlotGauge(Gauge):
 
 
         elif scale_factor > 0:
-            #for y in range(self.y + self.padding, self.y + self.padding + self.inner_height, int(8 * self.get_scale_factor())):
             
             if scale_factor > 1000:
                 return # current maximum value under 1 permill, thus no guides are placed
@@ -850,7 +866,7 @@ class PlotGauge(Gauge):
             elif scale_factor > 100:
                 # current maximum under 1 percent, place permill guides
                 # TODO: set color from self/theme
-                context.set_source_rgba(1,1,1, 0.1)
+                context.set_source_rgba(*self.colors['grid_milli'].tuple_rgba())
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 1000.0 * scale_factor
@@ -867,7 +883,7 @@ class PlotGauge(Gauge):
             elif scale_factor > 10:
 
                 # TODO: set color from self/theme
-                context.set_source_rgba(1,1,1, 0.3)
+                context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 100.0 * scale_factor
@@ -883,7 +899,7 @@ class PlotGauge(Gauge):
 
             else: # major (10% step) guides
                 # TODO: set color from self/theme
-                context.set_source_rgba(0.5,1,0, 0.5)
+                context.set_source_rgba(*self.colors['grid_major'].tuple_rgba())
                 for i in range(0, 110, 10): # 0,10,20..100
                     
                     value = i / 100.0 * scale_factor
@@ -904,16 +920,20 @@ class PlotGauge(Gauge):
             
         self.points.append(monitor.normalized(self.address))
       
-        #TODO: if self.background?
-        context.set_line_width(2)
-        context.set_source_rgba(*CONFIG_COLORS['gauge_background'])
+        context.set_line_width(1)
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
         context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.fill()
 
         self.draw_grid(context, monitor)
 
         if self.autoscale:
-            render_caption(context, "%.2fX" % self.get_scale_factor(), self.x + self.padding + self.inner_width, self.y, align='right_top', color=(0.5,1,0,0.3), font_size=10)
+            scale_factor = self.get_scale_factor()
+            if scale_factor == 0.0:
+                text = u"∞X"
+            else:
+                text = "%.2fX" % self.get_scale_factor()
+            render_caption(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=(0.5,1,0,0.3), font_size=10)
         
 
         coords = []
@@ -928,7 +948,7 @@ class PlotGauge(Gauge):
                 self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
-        context.set_source_rgba(*CONFIG_COLORS['highlight'])
+        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
         context.set_line_width(2)
         #context.set_line_cap(cairo.LINE_CAP_BUTT)
         # draw lines
@@ -943,7 +963,7 @@ class PlotGauge(Gauge):
         # place points
         for (x, y) in coords:
 
-            context.set_source_rgba(*CONFIG_COLORS['highlight'])
+            context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
 
             context.arc(
                 x,
@@ -992,7 +1012,7 @@ class Hugin(object):
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
 
-        context.set_source_rgba(*CONFIG_COLORS['window_background'])
+        context.set_source_rgba(*CONFIG_COLORS['window_background'].tuple_rgba())
         context.rectangle(0, 0, self.window.width, self.window.height)
         context.fill()
 
@@ -1143,10 +1163,10 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        address=['re0.bytes_recv', 're0.bytes_sent'],
+        address=['em0.bytes_recv', 'em0.bytes_sent'],
         captions=[
             {
-                'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
+                'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
                 'position': 'center_center',
                 'align': 'center_center',
             }
@@ -1159,7 +1179,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='re0.bytes_recv',
+        address='em0.bytes_recv',
     ),
     
     PlotGauge(
@@ -1168,7 +1188,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='re0.bytes_sent'
+        address='em0.bytes_sent'
     )
 ]
 
