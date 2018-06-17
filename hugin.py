@@ -793,27 +793,29 @@ class PlotGauge(Gauge):
         self.autoscale = autoscale
 
 
-    @property
-    def scale_factor(self):
-        return max(self.points)
+    def get_scale_factor(self):
+        p = max(self.points)
+        if p:
+            return 1.0 / p
+        return 0.0
 
 
-    @property
-    def points_scaled(self):
-        
-        scale_factor = max(self.points)
-
+    def get_points_scaled(self):
+       
+        scale_factor = self.get_scale_factor()
         if scale_factor == 0.0:
             return [0.0 for _ in range(0, len(self.points))]
 
         r = []
         for amplitude in self.points:
-            r.append(amplitude / scale_factor)
+            r.append(amplitude * scale_factor)
 
         return r
 
 
     def draw_grid(self, context, monitor):
+
+        scale_factor = self.get_scale_factor()
 
         context.set_line_width(1)
         context.set_source_rgba(1,1,1, 0.1)
@@ -822,12 +824,48 @@ class PlotGauge(Gauge):
         for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, 8):
             context.move_to(x, self.y + self.padding)
             context.line_to(x, self.y + self.padding + self.inner_height)
+        
+        context.stroke()
+        
 
-        for y in range(self.y + self.padding, self.y + self.padding + self.inner_height, 8):
-            context.move_to(self.x + self.padding, y)
-            context.line_to(self.x + self.padding + self.inner_width, y)
+        if scale_factor > 0:
+            #for y in range(self.y + self.padding, self.y + self.padding + self.inner_height, int(8 * self.get_scale_factor())):
+            
+            if scale_factor > 100:
+                return # current maximum value under 1%, thus no guides are placed
+
+            elif scale_factor > 10:
+
+                # TODO: set color for minor grid lines from self/theme
+                context.set_source_rgba(1,1,1, 0.3)
+                for i in range(0, 10):
+                    # place lines for 0-9 percent
+                    value = i / 100.0 * scale_factor
+                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+
+                    if y < self.y + self.padding:
+                        break # stop the loop if guides would be placed outside the gauge
+
+                    context.move_to(self.x + self.padding, y)
+                    context.line_to(self.x + self.padding + self.inner_width, y)
+
+            else:
+                # TODO: set color for minor grid lines from self/theme
+                context.set_source_rgba(0.5,1,0, 0.6)
+                for i in range(0, 110, 10): # 0,10,20..100
+                    
+                    value = i / 100.0 * scale_factor
+                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+
+                    if y < self.y + self.padding:
+                        break # stop the loop if guides would be placed outside the gauge
+
+                    context.move_to(self.x + self.padding, y)
+                    context.line_to(self.x + self.padding + self.inner_width, y)
+
 
         context.stroke()
+
         #context.set_dash([1,0]) # reset dash
 
 
@@ -845,7 +883,7 @@ class PlotGauge(Gauge):
 
         coords = []
         if self.autoscale:
-            points = self.points_scaled
+            points = self.get_points_scaled()
         else:
             points = self.points
 
@@ -1061,10 +1099,10 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        address=['em0.bytes_recv', 'em0.bytes_sent'],
+        address=['re0.bytes_recv', 're0.bytes_sent'],
         captions=[
             {
-                'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
+                'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
                 'position': 'center_center',
                 'align': 'center_center',
             }
@@ -1077,7 +1115,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='em0.bytes_recv'
+        address='re0.bytes_recv'
     ),
     
     PlotGauge(
@@ -1086,7 +1124,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='em0.bytes_sent'
+        address='re0.bytes_sent'
     )
 ]
 
