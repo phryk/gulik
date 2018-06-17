@@ -826,17 +826,47 @@ class PlotGauge(Gauge):
             context.line_to(x, self.y + self.padding + self.inner_height)
         
         context.stroke()
-        
 
-        if scale_factor > 0:
+        
+        if not self.autoscale:
+
+            for i in range(0, 110, 10): # 0,10,20..100
+                
+                value = i / 100.0
+                y = self.y + self.padding + self.inner_height - self.inner_height * value
+
+                context.move_to(self.x + self.padding, y)
+                context.line_to(self.x + self.padding + self.inner_width, y)
+
+            context.stroke()
+
+
+        elif scale_factor > 0:
             #for y in range(self.y + self.padding, self.y + self.padding + self.inner_height, int(8 * self.get_scale_factor())):
             
-            if scale_factor > 100:
-                return # current maximum value under 1%, thus no guides are placed
+            if scale_factor > 1000:
+                return # current maximum value under 1 permill, thus no guides are placed
+
+            elif scale_factor > 100:
+                # current maximum under 1 percent, place permill guides
+                # TODO: set color from self/theme
+                context.set_source_rgba(1,1,1, 0.1)
+                for i in range(0, 10):
+                    # place lines for 0-9 percent
+                    value = i / 1000.0 * scale_factor
+                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+
+                    if y < self.y + self.padding:
+                        break # stop the loop if guides would be placed outside the gauge
+
+                    context.move_to(self.x + self.padding, y)
+                    context.line_to(self.x + self.padding + self.inner_width, y)
+                
+                context.stroke()
 
             elif scale_factor > 10:
 
-                # TODO: set color for minor grid lines from self/theme
+                # TODO: set color from self/theme
                 context.set_source_rgba(1,1,1, 0.3)
                 for i in range(0, 10):
                     # place lines for 0-9 percent
@@ -848,10 +878,12 @@ class PlotGauge(Gauge):
 
                     context.move_to(self.x + self.padding, y)
                     context.line_to(self.x + self.padding + self.inner_width, y)
+                
+                context.stroke()
 
-            else:
-                # TODO: set color for minor grid lines from self/theme
-                context.set_source_rgba(0.5,1,0, 0.6)
+            else: # major (10% step) guides
+                # TODO: set color from self/theme
+                context.set_source_rgba(0.5,1,0, 0.5)
                 for i in range(0, 110, 10): # 0,10,20..100
                     
                     value = i / 100.0 * scale_factor
@@ -863,8 +895,7 @@ class PlotGauge(Gauge):
                     context.move_to(self.x + self.padding, y)
                     context.line_to(self.x + self.padding + self.inner_width, y)
 
-
-        context.stroke()
+                context.stroke()
 
         #context.set_dash([1,0]) # reset dash
 
@@ -880,6 +911,10 @@ class PlotGauge(Gauge):
         context.fill()
 
         self.draw_grid(context, monitor)
+
+        #if self.autoscale:
+        #render_caption(context, "%.2fX" % self.scale_factor, x, y, align=None, color=None, font_size=None):
+        
 
         coords = []
         if self.autoscale:
@@ -1115,7 +1150,8 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='re0.bytes_recv'
+        address='re0.bytes_recv',
+        autoscale=False
     ),
     
     PlotGauge(
