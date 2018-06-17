@@ -912,8 +912,8 @@ class PlotGauge(Gauge):
 
         self.draw_grid(context, monitor)
 
-        #if self.autoscale:
-        #render_caption(context, "%.2fX" % self.scale_factor, x, y, align=None, color=None, font_size=None):
+        if self.autoscale:
+            render_caption(context, "%.2fX" % self.get_scale_factor(), self.x + self.padding + self.inner_width, self.y, align='right_top', color=(0.5,1,0,0.3), font_size=10)
         
 
         coords = []
@@ -1041,7 +1041,7 @@ hugin.gauges['cpu'] = [
 
     ArcGauge(
         x=0,
-        y=150,
+        y=120,
         width=hugin.window.width / 2,
         height=100,
         address=0,
@@ -1057,7 +1057,7 @@ hugin.gauges['cpu'] = [
 
     ArcGauge(
         x=hugin.window.width / 2,
-        y=150,
+        y=120,
         width=hugin.window.width / 2,
         height=100,
         address=1,
@@ -1073,7 +1073,7 @@ hugin.gauges['cpu'] = [
 
     ArcGauge(
         x=0,
-        y=250,
+        y=210,
         width=hugin.window.width / 2,
         height=100,
         address=2,
@@ -1089,7 +1089,7 @@ hugin.gauges['cpu'] = [
 
     ArcGauge(
         x=hugin.window.width / 2,
-        y=250,
+        y=210,
         width=hugin.window.width / 2,
         height=100,
         address=3,
@@ -1101,13 +1101,22 @@ hugin.gauges['cpu'] = [
                 'font_size': 10,
             }
         ]
-    ), 
+    ),
+
+    PlotGauge(
+        x=0,
+        y=310,
+        width=hugin.window.width,
+        height=100,
+        padding=15,
+        autoscale=False,
+    )
 ]
 
 hugin.gauges['memory'] = [
     ArcGauge(
         x=0,
-        y=400,
+        y=410,
         width=hugin.window.width,
         height=hugin.window.width,
         stroke_width=30,
@@ -1151,7 +1160,6 @@ hugin.gauges['network'] = [
         height=100,
         padding=15,
         address='re0.bytes_recv',
-        autoscale=False
     ),
     
     PlotGauge(
