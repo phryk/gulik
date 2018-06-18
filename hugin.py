@@ -303,6 +303,29 @@ def render_caption(context, text, x, y, align=None, color=None, font_size=None):
     context.translate(-x - x_offset, -y - y_offset)
 
 
+## FILLS ##
+def stripe45(color):
+
+    surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
+    context = cairo.Context(surface)
+    context.set_source_rgba(*color.tuple_rgba())
+    context.move_to(5, 5)
+    context.line_to(10, 0)
+    context.line_to(10, 5)
+    context.line_to(5, 10)
+    context.line_to(0, 10)
+    context.line_to(5, 5)
+    context.close_path()
+    context.fill()
+
+    context.move_to(0, 0)
+    context.line_to(5, 0)
+    context.line_to(0, 5)
+    context.close_path()
+    context.fill()
+
+    return surface
+
 ##class PeriodicCall(threading.Thread):
 #
 #    """ Periodically forces a window to redraw """
@@ -326,6 +349,7 @@ def render_caption(context, text, x, y, align=None, color=None, font_size=None):
 #
 #            self.target()
 #            time.sleep(self.interval)
+
 
 # CONFIG: TODO: Move into its own file, obvsly
 CONFIG_FPS = 3
@@ -786,9 +810,10 @@ class PlotGauge(Gauge):
     points = None
     num_points = None
     autoscale = None
+    grid = None
     fill = None
 
-    def __init__(self, num_points=None, autoscale=True, fill=False, **kwargs):
+    def __init__(self, num_points=None, autoscale=True, grid=True, fill=False, **kwargs):
 
         super(PlotGauge, self).__init__(**kwargs)
 
@@ -800,6 +825,7 @@ class PlotGauge(Gauge):
         self.points = collections.deque([], self.num_points)
 
         self.autoscale = autoscale
+        self.grid = grid
         self.fill = fill
 
         self.colors['plot_line'] = self.colors['foreground'].clone()
@@ -932,7 +958,8 @@ class PlotGauge(Gauge):
         context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.fill()
 
-        self.draw_grid(context, monitor)
+        if self.grid:
+            self.draw_grid(context, monitor)
 
         if self.autoscale:
             scale_factor = self.get_scale_factor()
@@ -972,33 +999,7 @@ class PlotGauge(Gauge):
 
         if self.fill:
 
-            patternsurface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
-            pattern = cairo.Context(patternsurface)
-            pattern.set_source_rgba(*self.colors['plot_fill'].tuple_rgba())
-            pattern.move_to(5, 5)
-            pattern.line_to(10, 0)
-            pattern.line_to(10, 5)
-            pattern.line_to(5, 10)
-            pattern.line_to(0, 10)
-            pattern.line_to(5, 5)
-            pattern.close_path()
-            pattern.fill()
-
-            pattern.move_to(0, 0)
-            pattern.line_to(5, 0)
-            pattern.line_to(0, 5)
-            pattern.close_path()
-            pattern.fill()
-            #pattern.move_to(10,10)
-            #pattern.line_to(10,20)
-            #pattern.line_to(20,20)
-            #pattern.line_to
-
-            #pattern.set_extend(cairo.Extend.REPEAT)
-            #context.set_source(pattern)
-            context.set_source_surface(patternsurface)
-            #context.set_source_rgba(1,0,0,0.3)
-            p = context.get_source()
+            context.set_source_surface(stripe45(self.colors['plot_fill']))
             context.get_source().set_extend(cairo.Extend.REPEAT)
             
             context.move_to(self.x + self.padding, self.y + self.padding + self.inner_height)
@@ -1184,6 +1185,7 @@ hugin.gauges['cpu'] = [
         height=100,
         padding=15,
         autoscale=False,
+        #grid=False,
         fill=True,
     )
 ]
@@ -1218,10 +1220,10 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        address=['re0.bytes_recv', 're0.bytes_sent'],
+        address=['em0.bytes_recv', 'em0.bytes_sent'],
         captions=[
             {
-                'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
+                'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
                 'position': 'center_center',
                 'align': 'center_center',
             }
@@ -1234,7 +1236,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='re0.bytes_recv',
+        address='em0.bytes_recv',
         fill=True
     ),
     
@@ -1244,7 +1246,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='re0.bytes_sent'
+        address='em0.bytes_sent'
     )
 ]
 
