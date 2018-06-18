@@ -331,7 +331,7 @@ def render_caption(context, text, x, y, align=None, color=None, font_size=None):
 CONFIG_FPS = 3
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
-    'gauge_background': Color(1,1,1, 0.1),
+    'gauge_background': Color(1,1,1, 0.05),
     'highlight': Color(0.5, 1, 0, 0.6),
 }
 
@@ -786,8 +786,9 @@ class PlotGauge(Gauge):
     points = None
     num_points = None
     autoscale = None
+    fill = None
 
-    def __init__(self, num_points=None, autoscale=True, **kwargs):
+    def __init__(self, num_points=None, autoscale=True, fill=False, **kwargs):
 
         super(PlotGauge, self).__init__(**kwargs)
 
@@ -799,9 +800,16 @@ class PlotGauge(Gauge):
         self.points = collections.deque([], self.num_points)
 
         self.autoscale = autoscale
+        self.fill = fill
 
-        self.colors['grid_major'] = self.colors['foreground'].clone()
-        self.colors['grid_major'].alpha *= 0.8
+        self.colors['plot_line'] = self.colors['foreground'].clone()
+        self.colors['plot_line'].alpha *= 0.5
+        
+        self.colors['plot_fill'] = self.colors['foreground'].clone()
+        self.colors['plot_fill'].alpha *= 0.25
+
+        self.colors['grid_major'] = self.colors['plot_line'].clone()
+        self.colors['grid_major'].alpha *= 0.5
 
         self.colors['grid_minor'] = self.colors['background'].clone()
         self.colors['grid_minor'].alpha *= 0.8
@@ -920,7 +928,6 @@ class PlotGauge(Gauge):
             
         self.points.append(monitor.normalized(self.address))
       
-        context.set_line_width(1)
         context.set_source_rgba(*self.colors['background'].tuple_rgba())
         context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.fill()
@@ -948,10 +955,13 @@ class PlotGauge(Gauge):
                 self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
-        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+        
+        # draw lines
+
+        context.set_source_rgba(*self.colors['plot_line'].tuple_rgba())
         context.set_line_width(2)
         #context.set_line_cap(cairo.LINE_CAP_BUTT)
-        # draw lines
+
         for idx, (x, y) in enumerate(coords):
             if idx == 0:
                 context.move_to(x, y)
@@ -959,6 +969,49 @@ class PlotGauge(Gauge):
                 context.line_to(x, y)
 
         context.stroke()
+
+        if self.fill:
+
+            patternsurface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
+            pattern = cairo.Context(patternsurface)
+            pattern.set_source_rgba(*self.colors['plot_fill'].tuple_rgba())
+            pattern.move_to(5, 5)
+            pattern.line_to(10, 0)
+            pattern.line_to(10, 5)
+            pattern.line_to(5, 10)
+            pattern.line_to(0, 10)
+            pattern.line_to(5, 5)
+            pattern.close_path()
+            pattern.fill()
+
+            pattern.move_to(0, 0)
+            pattern.line_to(5, 0)
+            pattern.line_to(0, 5)
+            pattern.close_path()
+            pattern.fill()
+            #pattern.move_to(10,10)
+            #pattern.line_to(10,20)
+            #pattern.line_to(20,20)
+            #pattern.line_to
+
+            #pattern.set_extend(cairo.Extend.REPEAT)
+            #context.set_source(pattern)
+            context.set_source_surface(patternsurface)
+            #context.set_source_rgba(1,0,0,0.3)
+            p = context.get_source()
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+            
+            context.move_to(self.x + self.padding, self.y + self.padding + self.inner_height)
+            for idx, (x, y) in enumerate(coords):
+                if not self.fill and idx == 0:
+                    context.move_to(x, y)
+                else:
+                    context.line_to(x, y)
+
+            context.line_to(x, self.y + self.padding + self.inner_height)
+            context.close_path()
+
+            context.fill()
 
         # place points
         for (x, y) in coords:
@@ -1041,7 +1094,8 @@ class Hugin(object):
 
 hugin = Hugin()
 
-
+## The actual setup ##
+# TODO: This should move into a separate file together with theme
 hugin.gauges['cpu'] = [
 
     ArcGauge( # aggregate load
@@ -1130,6 +1184,7 @@ hugin.gauges['cpu'] = [
         height=100,
         padding=15,
         autoscale=False,
+        fill=True,
     )
 ]
 
@@ -1163,10 +1218,10 @@ hugin.gauges['network'] = [
         y=600,
         width=hugin.window.width,
         height=hugin.window.width,
-        address=['em0.bytes_recv', 'em0.bytes_sent'],
+        address=['re0.bytes_recv', 're0.bytes_sent'],
         captions=[
             {
-                'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
+                'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
                 'position': 'center_center',
                 'align': 'center_center',
             }
@@ -1179,7 +1234,8 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='em0.bytes_recv',
+        address='re0.bytes_recv',
+        fill=True
     ),
     
     PlotGauge(
@@ -1188,7 +1244,7 @@ hugin.gauges['network'] = [
         width=hugin.window.width,
         height=100,
         padding=15,
-        address='em0.bytes_sent'
+        address='re0.bytes_sent'
     )
 ]
 
