@@ -7,6 +7,7 @@ import random
 import signal
 import collections
 import threading
+import Queue # pretty much only for the Queue.Emptyrexception
 import multiprocessing
 import psutil
 import colorsys
@@ -272,18 +273,18 @@ def alignment_offset(align, size):
     return (x_offset, y_offset)
 
 
-def render_caption(context, text, x, y, align=None, color=None, font_size=None):
+def render_text(context, text, x, y, align=None, color=None, font_size=None):
     
     if align is None:
         align = 'left_top'
     
     if color is None:
-        color = (1,1,1, 0.6)
+        color = CONFIG_COLORS['text']
     
-    context.set_source_rgba(*color)
+    context.set_source_rgba(*color.tuple_rgba())
 
     if font_size is None:
-        font_size = 14
+        font_size = 12
 
     font = Pango.FontDescription('Orbitron %d' % font_size)
 
@@ -354,10 +355,14 @@ def stripe45(color):
 # CONFIG: TODO: Move into its own file, obvsly
 CONFIG_FPS = 3
 CONFIG_COLORS = {
-    'window_background': Color(0,0,0, 0.6),
-    'gauge_background': Color(1,1,1, 0.05),
+    'window_background': Color(0,0,0, 0.8),
+    'gauge_background': Color(1,1,1, 0.1),
     'highlight': Color(0.5, 1, 0, 0.6),
+    'text': Color(1,1,1, 0.6),
+    'text_minor': Color(1,1,1, 0.3)
 }
+CONFIG_WIDTH = 200
+CONFIG_HEIGHT = 1080 - 32
 
 ## HUGIN ##
 
@@ -369,7 +374,7 @@ class Window(Gtk.Window):
 
         self.set_title('hugin')
         self.set_role('hugin')
-        self.resize(200, 1080-32)
+        self.resize(CONFIG_WIDTH, CONFIG_HEIGHT)
         self.stick() # show this window on every virtual desktop
 
         self.set_app_paintable(True)
@@ -413,9 +418,13 @@ class Collector(multiprocessing.Process):
 
         while True:
 
-            msg = self.queue_update.get(block=True)
-            if msg == 'UPDATE':
-                self.update()
+            try:
+                msg = self.queue_update.get(block=True)
+                if msg == 'UPDATE':
+                    self.update()
+
+            except KeyboardInterrupt: # so we don't randomly explode on ctrl+c
+                pass
 
 
     def update(self):
@@ -653,8 +662,9 @@ class Gauge(object):
     address = None
     captions = None
     colors = None
+    pattern = None
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None, foreground=None, background=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None, foreground=None, background=None, pattern=None):
 
         self.x = x
         self.y = y
@@ -675,6 +685,8 @@ class Gauge(object):
             self.colors['background'] = CONFIG_COLORS['gauge_background']
         else:
             self.colors['background'] = background
+
+        self.pattern = pattern
 
 
     @property
@@ -715,7 +727,7 @@ class Gauge(object):
 
             caption_text = monitor.caption(caption['text'])
 
-            render_caption(context, caption_text, position[0], position[1], align=caption.get('align', None), font_size=caption.get('font_size', None))
+            render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
 
 class ArcGauge(Gauge):
@@ -739,7 +751,13 @@ class ArcGauge(Gauge):
         context.set_line_width(self.stroke_width)
         context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        context.set_source_rgba(*self.colors['background'].tuple_rgba())
+        if self.pattern:
+            context.set_source_surface(self.pattern(self.colors['background']))
+
+        else:
+            context.set_source_rgba(*self.colors['background'].tuple_rgba())
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+
         context.arc( # shadow arc
             self.x_center,
             self.y_center,
@@ -750,7 +768,13 @@ class ArcGauge(Gauge):
         
         context.stroke()
 
-        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+        if self.pattern:
+            context.set_source_surface(self.pattern(self.colors['foreground']))
+
+        else:
+            context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+
         context.arc(
             self.x_center,
             self.y_center,
@@ -810,10 +834,11 @@ class PlotGauge(Gauge):
     points = None
     num_points = None
     autoscale = None
+    markers = None
+    line = None
     grid = None
-    fill = None
 
-    def __init__(self, num_points=None, autoscale=True, grid=True, fill=False, **kwargs):
+    def __init__(self, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
         super(PlotGauge, self).__init__(**kwargs)
 
@@ -825,8 +850,9 @@ class PlotGauge(Gauge):
         self.points = collections.deque([], self.num_points)
 
         self.autoscale = autoscale
+        self.markers = markers
+        self.line = line
         self.grid = grid
-        self.fill = fill
 
         self.colors['plot_line'] = self.colors['foreground'].clone()
         self.colors['plot_line'].alpha *= 0.5
@@ -842,6 +868,9 @@ class PlotGauge(Gauge):
 
         self.colors['grid_milli'] = self.colors['background'].clone()
         self.colors['grid_milli'].alpha *= 0.4
+
+        self.colors['caption_scale'] = self.colors['foreground'].clone()
+        self.colors['caption_scale'].alpha *= 0.6
 
 
     def get_scale_factor(self):
@@ -967,7 +996,7 @@ class PlotGauge(Gauge):
                 text = u"∞X"
             else:
                 text = "%.2fX" % self.get_scale_factor()
-            render_caption(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=(0.5,1,0,0.3), font_size=10)
+            render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
         
 
         coords = []
@@ -982,61 +1011,71 @@ class PlotGauge(Gauge):
                 self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
-        
-        # draw lines
+       
+        if self.line:
 
-        context.set_source_rgba(*self.colors['plot_line'].tuple_rgba())
-        context.set_line_width(2)
-        #context.set_line_cap(cairo.LINE_CAP_BUTT)
+            # draw lines
 
-        for idx, (x, y) in enumerate(coords):
-            if idx == 0:
-                context.move_to(x, y)
-            else:
-                context.line_to(x, y)
+            context.set_source_rgba(*self.colors['plot_line'].tuple_rgba())
+            context.set_line_width(2)
+            #context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        context.stroke()
+            for idx, (x, y) in enumerate(coords):
+                if idx == 0:
+                    context.move_to(x, y)
+                else:
+                    context.line_to(x, y)
 
-        if self.fill:
+            context.stroke()
 
-            context.set_source_surface(stripe45(self.colors['plot_fill']))
+        if self.pattern:
+
+            context.set_source_surface(self.pattern(self.colors['plot_fill']))
             context.get_source().set_extend(cairo.Extend.REPEAT)
             
             context.move_to(self.x + self.padding, self.y + self.padding + self.inner_height)
             for idx, (x, y) in enumerate(coords):
-                if not self.fill and idx == 0:
-                    context.move_to(x, y)
-                else:
-                    context.line_to(x, y)
+                context.line_to(x, y)
 
             context.line_to(x, self.y + self.padding + self.inner_height)
             context.close_path()
 
             context.fill()
 
-        # place points
-        for (x, y) in coords:
+        if self.markers:
 
-            context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+            # place points
+            for (x, y) in coords:
 
-            context.arc(
-                x,
-                y,
-                2,
-                0,
-                2 * math.pi
-            )
-        
-            context.fill()
+                context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+
+                context.arc(
+                    x,
+                    y,
+                    2,
+                    0,
+                    2 * math.pi
+                )
+            
+                context.fill()
 
         super(PlotGauge, self).update(context, monitor)
 
 
 class Hugin(object):
 
+    monitor_table = {
+        'cpu': CPUMonitor,
+        'memory': MemoryMonitor,
+        'network': NetworkMonitor
+    }
+
     window = None
     monitors = None
     gauges = None
+    _last_right = None
+    _last_top = None
+    _last_bottom = None
 
 
     def __init__(self):
@@ -1045,11 +1084,15 @@ class Hugin(object):
         self.window.connect('draw', self.draw)
         
         self.monitors = {}
-        self.monitors['cpu'] = CPUMonitor()
-        self.monitors['memory'] = MemoryMonitor()
-        self.monitors['network'] = NetworkMonitor()
+        #self.monitors['cpu'] = CPUMonitor()
+        #self.monitors['memory'] = MemoryMonitor()
+        #self.monitors['network'] = NetworkMonitor()
 
         self.gauges = {}
+
+        self._last_right = 0
+        self._last_top = 0
+        self._last_bottom = 0 
 
 
     def tick(self):
@@ -1079,6 +1122,60 @@ class Hugin(object):
                     gauge.update(context, monitor)
 
 
+    def autoplace_gauge(self, component, cls, **kwargs):
+
+        width = kwargs.get('width', None)
+        height = kwargs.get('height', None)
+
+        if width is None:
+            width = self.window.width - self._last_right
+
+            if height is None:
+                height = self._last_bottom - self._last_top # same height as previous gauge
+
+                if height == 0: # should only happen on first gauge
+                    height = self.window.height
+
+        elif height is None:
+            height = self.window.height - self._last_bottom
+
+        if self._last_right + width > self.window.width: # move to next "row"
+            x = 0
+            y = self._last_bottom
+
+        else:
+            x = self._last_right
+            y = self._last_top
+
+
+        kwargs['x'] = x
+        kwargs['y'] = y
+        kwargs['width'] = width
+        kwargs['height'] = height
+
+        self.add_gauge(component, cls, **kwargs)
+
+
+    def add_gauge(self, component, cls, **kwargs):
+
+        if not self.monitors.has_key(component):
+            if self.monitor_table.has_key(component):
+                print "Autoloading %s!" % self.monitor_table[component].__name__
+                self.monitors[component] = self.monitor_table[component]()
+            else:
+                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Hugin.monitor_table to enable autoloading." % component)
+
+        if not self.gauges.has_key(component):
+            self.gauges[component] = []
+            
+        gauge = cls(**kwargs)
+        self.gauges[component].append(gauge)
+
+        self._last_right = gauge.x + gauge.width
+        self._last_top = gauge.y
+        self._last_bottom = gauge.y + gauge.height
+
+
     def start(self):
 
         assert CONFIG_FPS != 0
@@ -1087,167 +1184,73 @@ class Hugin(object):
         for monitor in self.monitors.itervalues():
             monitor.start()
 
-        signal.signal(signal.SIGINT, Gtk.main_quit) # so ctrl+c actually kills hugin
+        signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills hugin
         GLib.timeout_add(1000/CONFIG_FPS, self.tick)
         Gtk.main()
-        print "Thank you for flying with phryk evil mad sciences, LLC. Please come again."
+        print "\nThank you for flying with phryk evil mad sciences, LLC. Please come again."
 
+
+    def stop(self, num, frame):
+
+        Gtk.main_quit()
+
+
+## The actual setup ##
 
 hugin = Hugin()
 
-## The actual setup ##
 # TODO: This should move into a separate file together with theme
-hugin.gauges['cpu'] = [
 
-    ArcGauge( # aggregate load
-        x=0,
-        y=0,
-        width=hugin.window.width,
-        height=150,
-        stroke_width=10,
-        captions=[
-            {
-                'text': '{aggregate:.1f}% on {count} cores',
-                'position': 'center_center',
-                'align': 'center_center'
-            }
-        ]
-    ), 
+hugin.autoplace_gauge('cpu', ArcGauge, width=hugin.window.width, height=hugin.window.width, stroke_width=10, captions=[
+        {
+            'text': '{aggregate:.1f}%',
+            'position': 'center_center',
+            'align': 'center_center',
+            'font_size': 14
+        },
+        {
+            'text': '{count} cores',
+            'position': 'right_bottom',
+            'align': 'right_bottom',
+            'color': CONFIG_COLORS['text_minor'],
+            'font_size': 8
+        }
+    ]
+)
 
-    ArcGauge(
-        x=0,
-        y=120,
-        width=hugin.window.width / 2,
-        height=100,
-        address=0,
-        captions=[
-            {
-                'text': '{core_0:.1f}%',
-                'position': 'center_center',
-                'align': 'center_center',
-                'font_size': 10,
-            }
-        ]
-    ),
+hugin.autoplace_gauge('cpu', ArcGauge, address=0, width=hugin.window.width / 4, height=hugin.window.width / 4)
+hugin.autoplace_gauge('cpu', ArcGauge, address=1, width=hugin.window.width / 4, height=hugin.window.width / 4)
+hugin.autoplace_gauge('cpu', ArcGauge, address=2, width=hugin.window.width / 4, height=hugin.window.width / 4)
+hugin.autoplace_gauge('cpu', ArcGauge, address=3, width=hugin.window.width / 4, height=hugin.window.width / 4)
+hugin.autoplace_gauge('cpu', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, autoscale=False)
 
-    ArcGauge(
-        x=hugin.window.width / 2,
-        y=120,
-        width=hugin.window.width / 2,
-        height=100,
-        address=1,
-        captions=[
-            {
-                'text': '{core_1:.1f}%',
-                'position': 'center_center',
-                'align': 'center_center',
-                'font_size': 10,
-            }
-        ]
-    ),
+hugin.autoplace_gauge('memory', ArcGauge, width=hugin.window.width, height=hugin.window.width, stroke_width=30, captions=[
+        {
+            'text': '{percent:.1f}%',
+            'position': 'center_center',
+            'align': 'center_center'
+        },
 
-    ArcGauge(
-        x=0,
-        y=210,
-        width=hugin.window.width / 2,
-        height=100,
-        address=2,
-        captions=[
-            {
-                'text': '{core_2:.1f}%',
-                'position': 'center_center',
-                'align': 'center_center',
-                'font_size': 10,
-            }
-        ]
-    ),
+        {
+            'text': '{total}',
+            'position': 'left_top',
+            'align': 'left_top',
+            'color': CONFIG_COLORS['text_minor'],
+            'font_size': 8,
+        }
+    ]
+)
 
-    ArcGauge(
-        x=hugin.window.width / 2,
-        y=210,
-        width=hugin.window.width / 2,
-        height=100,
-        address=3,
-        captions=[
-            {
-                'text': '{core_3:.1f}%',
-                'position': 'center_center',
-                'align': 'center_center',
-                'font_size': 10,
-            }
-        ]
-    ),
+hugin.autoplace_gauge('network', DualArcGauge, width=hugin.window.width, height=hugin.window.width, address=['re0.bytes_recv', 're0.bytes_sent'], pattern=stripe45, captions=[
+        {
+            'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
+            'position': 'center_center',
+            'align': 'center_center',
+        }
+    ]
+)
 
-    PlotGauge(
-        x=0,
-        y=310,
-        width=hugin.window.width,
-        height=100,
-        padding=15,
-        autoscale=False,
-        #grid=False,
-        fill=True,
-    )
-]
-
-hugin.gauges['memory'] = [
-    ArcGauge(
-        x=0,
-        y=410,
-        width=hugin.window.width,
-        height=hugin.window.width,
-        stroke_width=30,
-        captions=[
-            {
-                'text': '{percent:.1f}%',
-                'position': 'center_center',
-                'align': 'center_center'
-            },
-
-            {
-                'text': '{total}',
-                'position': 'left_top',
-                'align': 'left_top',
-                'font_size': 8,
-            }
-        ]
-    )
-]
-
-hugin.gauges['network'] = [
-    DualArcGauge(
-        x=0,
-        y=600,
-        width=hugin.window.width,
-        height=hugin.window.width,
-        address=['em0.bytes_recv', 'em0.bytes_sent'],
-        captions=[
-            {
-                'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
-                'position': 'center_center',
-                'align': 'center_center',
-            }
-        ]
-    ),
-
-    PlotGauge(
-        x=0,
-        y=800,
-        width=hugin.window.width,
-        height=100,
-        padding=15,
-        address='em0.bytes_recv',
-        fill=True
-    ),
-    
-    PlotGauge(
-        x=0,
-        y=900,
-        width=hugin.window.width,
-        height=100,
-        padding=15,
-        address='em0.bytes_sent'
-    )
-]
+hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='re0.bytes_sent')
+hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='re0.bytes_recv')
 
 hugin.start()
