@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
 
 import math
@@ -7,7 +7,6 @@ import random
 import signal
 import collections
 import threading
-import Queue # pretty much only for the Queue.Emptyrexception
 import multiprocessing
 import psutil
 import colorsys
@@ -553,7 +552,7 @@ class MemoryMonitor(Monitor):
     def caption(self, fmt):
 
         data = {}
-        for k, v in self.data._asdict().iteritems():
+        for k, v in self.data._asdict().items():
             if k != 'percent':
                 v = pretty_bytes(v)
 
@@ -593,9 +592,9 @@ class NetworkMonitor(Monitor):
         while self.collector.is_alive():
             data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
             self.data = data
-            for if_name, if_info in self.interfaces.iteritems():
+            for if_name, if_info in self.interfaces.items():
                 
-                for key, deque in if_info['counters'].iteritems():
+                for key, deque in if_info['counters'].items():
                     deque.append(self.data['counters'][if_name]._asdict()[key])
                 
                 self.interfaces[if_name]['stats'] = self.data['stats'][if_name]._asdict()
@@ -709,10 +708,9 @@ class Gauge(object):
 
         for caption in self.captions:
 
-            if caption.has_key('position'):
+            if 'position' in caption:
 
-
-                if isinstance(caption['position'], basestring):
+                if isinstance(caption['position'], str):
                     # handle alignment-style strings like "center_bottom"
                     position = [-x for x in alignment_offset(caption['position'], (self.width - 2 * self.padding, self.height - 2 * self.padding))]
 
@@ -845,7 +843,7 @@ class PlotGauge(Gauge):
         if num_points:
             self.num_points = num_points
         else:
-            self.num_points = self.inner_width / 8 + 1
+            self.num_points = self.inner_width // 8 + 1
 
         self.points = collections.deque([], self.num_points)
 
@@ -1097,7 +1095,7 @@ class Hugin(object):
 
     def tick(self):
 
-        for monitor in self.monitors.itervalues():
+        for monitor in self.monitors.values():
             monitor.tick()
         self.window.queue_draw()
         return True # gtk stops executing timeout callbacks if they don't return True
@@ -1113,9 +1111,9 @@ class Hugin(object):
         context.rectangle(0, 0, self.window.width, self.window.height)
         context.fill()
 
-        for source, monitor in self.monitors.iteritems():
+        for source, monitor in self.monitors.items():
 
-            if len(monitor.data) and self.gauges.has_key(source):
+            if len(monitor.data) and source in self.gauges:
                 gauges = self.gauges[source]
 
                 for gauge in gauges:
@@ -1158,14 +1156,14 @@ class Hugin(object):
 
     def add_gauge(self, component, cls, **kwargs):
 
-        if not self.monitors.has_key(component):
-            if self.monitor_table.has_key(component):
-                print "Autoloading %s!" % self.monitor_table[component].__name__
+        if not component in self.monitors:
+            if component in self.monitor_table:
+                print("Autoloading %s!" % self.monitor_table[component].__name__)
                 self.monitors[component] = self.monitor_table[component]()
             else:
                 raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Hugin.monitor_table to enable autoloading." % component)
 
-        if not self.gauges.has_key(component):
+        if not component in self.gauges:
             self.gauges[component] = []
             
         gauge = cls(**kwargs)
@@ -1181,13 +1179,13 @@ class Hugin(object):
         assert CONFIG_FPS != 0
         assert isinstance(CONFIG_FPS, float) or CONFIG_FPS >= 1
 
-        for monitor in self.monitors.itervalues():
+        for monitor in self.monitors.values():
             monitor.start()
 
         signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills hugin
         GLib.timeout_add(1000/CONFIG_FPS, self.tick)
         Gtk.main()
-        print "\nThank you for flying with phryk evil mad sciences, LLC. Please come again."
+        print("\nThank you for flying with phryk evil mad sciences, LLC. Please come again.")
 
 
     def stop(self, num, frame):
@@ -1241,16 +1239,16 @@ hugin.autoplace_gauge('memory', ArcGauge, width=hugin.window.width, height=hugin
     ]
 )
 
-hugin.autoplace_gauge('network', DualArcGauge, width=hugin.window.width, height=hugin.window.width, address=['re0.bytes_recv', 're0.bytes_sent'], pattern=stripe45, captions=[
+hugin.autoplace_gauge('network', DualArcGauge, width=hugin.window.width, height=hugin.window.width, address=['em0.bytes_recv', 'em0.bytes_sent'], pattern=stripe45, captions=[
         {
-            'text': '{re0[counters][bytes_recv]}/s\n{re0[counters][bytes_sent]}/s',
+            'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
             'position': 'center_center',
             'align': 'center_center',
         }
     ]
 )
 
-hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='re0.bytes_sent')
-hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='re0.bytes_recv')
+hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_sent')
+hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_recv')
 
 hugin.start()
