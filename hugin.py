@@ -464,7 +464,7 @@ class NetworkCollector(Collector):
 
         stats = psutil.net_if_stats()
         addrs = psutil.net_if_addrs()
-        counters = psutil.net_io_counters(pernic=True, nowrap=True)
+        counters = psutil.net_io_counters(pernic=True)
         connections = psutil.net_connections(kind='all')
 
         self.queue_data.put({
@@ -474,7 +474,12 @@ class NetworkCollector(Collector):
             'connections': connections,
         })
 
-        #psutil.net_io_counters.cache_clear()
+
+class BatteryCollector(Collector):
+
+    def update(self):
+        
+        self.queue_data.put(psutil.sensors_battery())
 
 
 class Monitor(threading.Thread):
@@ -539,6 +544,7 @@ class CPUMonitor(Monitor):
             data['core_%d' % idx] = perc
 
         return fmt.format(**data)
+
 
 class MemoryMonitor(Monitor):
 
@@ -651,6 +657,20 @@ class NetworkMonitor(Monitor):
         return fmt.format(**data)
 
 
+class BatteryMonitor(Monitor):
+
+    collector_type = BatteryCollector
+
+    def normalized(self, address=None):
+        if len(self.data):
+            return self.data.percent / 100.0
+
+
+    def caption(self, fmt):
+
+        return fmt.format(**self.data._asdict())
+
+
 class Gauge(object):
 
     x = None
@@ -728,6 +748,21 @@ class Gauge(object):
             render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
 
+class RectGauge(Gauge):
+
+    def update(self, context, monitor):
+        
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
+        context.fill()
+
+        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width * monitor.normalized(self.address), self.inner_height)
+        context.fill()
+
+        super(RectGauge, self).update(context, monitor)
+
+
 class ArcGauge(Gauge):
 
     stroke_width = None
@@ -788,6 +823,14 @@ class ArcGauge(Gauge):
 
 class DualArcGauge(ArcGauge):
 
+    def __init__(self, **kwargs):
+
+        super(DualArcGauge, self).__init__(**kwargs)
+
+        self.colors['foreground_second'] = self.colors['foreground'].clone()
+        self.colors['foreground_second'].hue += 225
+
+
     def update(self, context, monitor):
 
         context.set_line_width(self.stroke_width)
@@ -814,7 +857,7 @@ class DualArcGauge(ArcGauge):
         )
         context.stroke()
 
-        context.set_source_rgba(1,0,0.5, 0.6)
+        context.set_source_rgba(*self.colors['foreground_second'].tuple_rgba())
         context.arc_negative(
             self.x_center,
             self.y_center,
@@ -1065,7 +1108,8 @@ class Hugin(object):
     monitor_table = {
         'cpu': CPUMonitor,
         'memory': MemoryMonitor,
-        'network': NetworkMonitor
+        'network': NetworkMonitor,
+        'battery': BatteryMonitor
     }
 
     window = None
@@ -1250,5 +1294,14 @@ hugin.autoplace_gauge('network', DualArcGauge, width=hugin.window.width, height=
 
 hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_sent')
 hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_recv')
+
+hugin.autoplace_gauge('battery', RectGauge, width=hugin.window.width, height=50, padding=0, captions=[
+        {
+            'text': '{percent}%',
+            'position': 'right_center',
+            'align': 'right_center',
+        }
+    ]
+)
 
 hugin.start()
