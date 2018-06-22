@@ -432,7 +432,7 @@ def stripe45(color):
 # CONFIG: TODO: Move into its own file, obvsly
 CONFIG_FPS = 3
 CONFIG_COLORS = {
-    'window_background': Color(0,0,0, 0.8),
+    'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
     'highlight': Color(0.5, 1, 0, 0.6),
     'text': Color(1,1,1, 0.6),
@@ -722,7 +722,7 @@ class NetworkMonitor(Monitor):
             if self.interfaces[if_name]['stats']['speed']:
                 link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
             else: # speed == 0 means it couldn't be determined, fall back to 100Mbit/s
-                link_quality = float(100 * 1024**2)
+                link_quality = float(1000 * 1024**2)
 
             return (self.count_sec(if_name, key) * 8) / link_quality
 
@@ -775,7 +775,7 @@ class Gauge(object):
     colors = None
     pattern = None
     palette = None # function to generate color palettes with
-    combination = None # combination mode when handling multiple elements. 'separate' or 'cumulative'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
+    combination = None # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_forced'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
     def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None):
 
@@ -1047,11 +1047,30 @@ class PlotGauge(Gauge):
 
     def get_scale_factor(self):
 
-        maxes = []
-        for element in self.elements:
-            maxes.append(max(self.points[element]))
+        if self.combination == 'cumulative_force':
 
-        p = max(maxes)
+            cumulative_points = []
+            for idx in range(0, self.num_points):
+
+                value = 0.0
+                for element in self.elements:
+
+                    try:
+                        value += self.points[element][idx]
+                    except IndexError as e:
+                        continue # means self.points deques aren't filled completely yet
+
+                    cumulative_points.append(value / len(self.elements))
+
+            p = max(cumulative_points)
+
+        else:
+            maxes = []
+            for element in self.elements:
+                maxes.append(max(self.points[element]))
+
+            p = max(maxes)
+
         if p > 0:
             return 1.0 / p
         return 0.0
@@ -1462,7 +1481,7 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
-        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, grid=False, palette=functools.partial(palette_hue, distance=-120), pattern=stripe45, autoscale=False, combination='cumulative_force', markers=False, line=True)
+        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, palette=functools.partial(palette_hue, distance=-120), pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
         self.autoplace_gauge('cpu', RectGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=50, palette=functools.partial(palette_hue, distance=-120))
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
