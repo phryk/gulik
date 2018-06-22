@@ -6,6 +6,7 @@ import time
 import random
 import signal
 import collections
+import functools
 import threading
 import multiprocessing
 import psutil
@@ -210,6 +211,83 @@ class Color(object):
         super(Color, self).__setattr__('blue', blue)
 
 
+class DotDict(collections.UserDict):
+
+    """
+    A dictionary with its data being readable through faked attributes.
+    Used to avoid [[[][][][][]] in caption formatting.
+    """
+
+    def __getattribute__(self, name):
+
+        data = super(DotDict, self).__getattribute__('data')
+        if name in data:
+            return data[name]
+
+        return super(DotDict, self).__getattribute__(name)
+
+
+def palette_hue(base, count, distance=180):
+
+    """
+    Creates a hue-rotation palette 
+    base - Color on which the palette will be based (i.e. the starting point of the hue-rotation)
+    count - number of colors the palette should hold
+    distance - angular distance on a 360° hue circle thingamabob
+    """
+
+    if count == 1:
+        return [base]
+
+    palette = []
+
+    for i in range(0, count):
+        color = base.clone()
+        color.hue += i/(count - 1) * distance
+
+        palette.append(color)
+
+    return palette
+
+
+def palette_value(base, count, min=None, max=None):
+    
+    """
+    Creates a value-stepped palette 
+    base - Color on which the palette will be based (i.e. source of hue and saturation)
+    count - number of colors the palette should hold
+    min - minimum value (the v in hsv)
+    max - maxmimum value
+    """
+
+    if count == 1:
+        return [base]
+
+    if min is None:
+        if 0.2 > base.value:
+            min = base.value
+        else:
+            min = 0.2
+
+    if max is None:
+        if 0.6 < base.value:
+            max = base.value
+        else:
+            max = 0.6
+
+    span = max - min 
+    step = span / (count - 1)
+
+    palette = []
+
+    for i in range(0, count):
+        color = base.clone()
+        color.value = max - i * step
+        palette.append(color)
+
+    return palette
+
+
 def pretty_bytes(bytecount):
 
     """
@@ -231,7 +309,7 @@ def pretty_bytes(bytecount):
 def pretty_bits(bytecount):
 
     """
-    Return a human readable representation given a size in bytes.
+    Return a human readable representation in bits given a size in bytes.
     """
 
     units = ['bit', 'kbit', 'Mbit', 'Gbit', 'Tbit']
@@ -363,8 +441,7 @@ CONFIG_COLORS = {
 CONFIG_WIDTH = 200
 CONFIG_HEIGHT = 1080 - 32
 
-## HUGIN ##
-
+## Stuff I'd much rather do without a huge dependency like gtk ##
 class Window(Gtk.Window):
 
     def __init__(self):
@@ -385,8 +462,6 @@ class Window(Gtk.Window):
         if visual != None and screen.is_composited():
             self.set_visual(visual)
 
-
-
         self.show_all()
         self.move(0, 32) # move apparently must be called after show_all
 
@@ -402,6 +477,8 @@ class Window(Gtk.Window):
 
         return self.get_size()[1]
 
+
+## Collectors ##
 
 class Collector(multiprocessing.Process):
 
@@ -442,7 +519,8 @@ class CPUCollector(Collector):
                 'count': count,
                 'aggregate': aggregate, 
                 'percpu': percpu
-            }
+            },
+            block=True
         )
         
         time.sleep(0.1) # according to psutil docs, there should at least be 0.1 seconds between calls to cpu_percent without interval
@@ -452,8 +530,12 @@ class MemoryCollector(Collector):
 
     def update(self):
 
+        virtual_memory = psutil.virtual_memory()
+        
+        for process in psutil.process_iter():
+            break
         self.queue_data.put(
-            psutil.virtual_memory(),
+            virtual_memory,
             block=True
         )
 
@@ -467,20 +549,25 @@ class NetworkCollector(Collector):
         counters = psutil.net_io_counters(pernic=True)
         connections = psutil.net_connections(kind='all')
 
-        self.queue_data.put({
-            'stats': stats,
-            'addrs': addrs,
-            'counters': counters,
-            'connections': connections,
-        })
+        self.queue_data.put(
+            {
+                'stats': stats,
+                'addrs': addrs,
+                'counters': counters,
+                'connections': connections,
+            },
+            block=True
+        )
 
 
 class BatteryCollector(Collector):
 
     def update(self):
         
-        self.queue_data.put(psutil.sensors_battery())
+        self.queue_data.put(psutil.sensors_battery(), block=True)
 
+
+## Monitors ##
 
 class Monitor(threading.Thread):
 
@@ -500,7 +587,7 @@ class Monitor(threading.Thread):
     def tick(self):
             
         if not self.queue_update.full():
-            self.queue_update.put('UPDATE', False)
+            self.queue_update.put('UPDATE', block=True)
 
 
     def start(self):
@@ -516,7 +603,7 @@ class Monitor(threading.Thread):
             self.data = data
 
 
-    def normalized(self, address=None):
+    def normalized(self, element=None):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
@@ -528,11 +615,14 @@ class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
 
-    def normalized(self, address=None):
+    def normalized(self, element=None):
 
-        if isinstance(address, int):
-            return self.data['percpu'][address] / 100.0
-        return self.data['aggregate'] / 100.0
+        if element == 'aggregate':
+            return self.data['aggregate'] / 100.0
+        
+        # assume core_<n> otherwise
+        idx = int(element.split('_')[1])
+        return self.data['percpu'][idx] / 100.0
 
 
     def caption(self, fmt):
@@ -550,7 +640,7 @@ class MemoryMonitor(Monitor):
 
     collector_type = MemoryCollector
 
-    def normalized(self, address=None):
+    def normalized(self, element=None):
         if len(self.data):
             return self.data.percent / 100.0
 
@@ -623,9 +713,9 @@ class NetworkMonitor(Monitor):
             return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
 
 
-    def normalized(self, address=None):
+    def normalized(self, element=None):
 
-        if_name, key = address.split('.')
+        if_name, key = element.split('.')
 
         if len(self.data):
 
@@ -643,11 +733,11 @@ class NetworkMonitor(Monitor):
 
         for if_name in self.interfaces.keys():
 
-            data[if_name] = {}
+            data[if_name] = DotDict()
             data[if_name]['addrs'] = self.interfaces[if_name]['addrs']
-            data[if_name]['stats'] = self.interfaces[if_name]['stats']
+            data[if_name]['stats'] = DotDict(self.interfaces[if_name]['stats'])
 
-            data[if_name]['counters'] = {}
+            data[if_name]['counters'] = DotDict()
             for k in self.interfaces[if_name]['counters'].keys():
 
                 data[if_name]['counters'][k] = self.count_sec(if_name, k)
@@ -661,7 +751,7 @@ class BatteryMonitor(Monitor):
 
     collector_type = BatteryCollector
 
-    def normalized(self, address=None):
+    def normalized(self, element=None):
         if len(self.data):
             return self.data.percent / 100.0
 
@@ -671,6 +761,8 @@ class BatteryMonitor(Monitor):
         return fmt.format(**self.data._asdict())
 
 
+## Gauges ##
+
 class Gauge(object):
 
     x = None
@@ -678,19 +770,21 @@ class Gauge(object):
     width = None
     height = None
     padding = None
-    address = None
+    elements = None
     captions = None
     colors = None
     pattern = None
+    palette = None # function to generate color palettes with
+    combination = None # combination mode when handling multiple elements. 'separate' or 'cumulative'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, address=None, captions=None, foreground=None, background=None, pattern=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None):
 
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.padding = padding
-        self.address = address
+        self.elements = elements if elements is not None else [None]
         self.captions = captions if captions else list()
 
         self.colors = {}
@@ -706,6 +800,8 @@ class Gauge(object):
             self.colors['background'] = background
 
         self.pattern = pattern
+        self.palette = palette or palette_value
+        self.combination = combination or 'separate'
 
 
     @property
@@ -756,9 +852,21 @@ class RectGauge(Gauge):
         context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.fill()
 
-        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width * monitor.normalized(self.address), self.inner_height)
-        context.fill()
+        colors = self.palette(self.colors['foreground'], len(self.elements))
+        offset = 0.0
+        for idx, element in enumerate(self.elements):
+
+            value = monitor.normalized(element)
+
+            if self.combination == 'separate':
+                value /= len(self.elements)
+
+            color = colors[idx]
+            context.set_source_rgba(*color.tuple_rgba())
+            
+            context.rectangle(self.x + self.padding + self.inner_width * offset, self.y + self.padding, self.inner_width * value, self.inner_height)
+            context.fill()
+            offset += value
 
         super(RectGauge, self).update(context, monitor)
 
@@ -779,6 +887,26 @@ class ArcGauge(Gauge):
         self.y_center = self.y + self.height / 2
 
 
+    def draw_arc(self, context, value, color, offset=0.0):
+
+        if self.pattern:
+            context.set_source_surface(self.pattern(self.colors['foreground']))
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+
+        else:
+            context.set_source_rgba(*color.tuple_rgba())
+
+        context.arc(
+            self.x_center,
+            self.y_center,
+            self.radius,
+            math.pi / 2 + math.pi * 2 * offset,
+            math.pi / 2 + math.pi * 2 * (offset + value)
+        )
+
+        context.stroke()
+
+
     def update(self, context, monitor):
 
         context.set_line_width(self.stroke_width)
@@ -786,10 +914,10 @@ class ArcGauge(Gauge):
 
         if self.pattern:
             context.set_source_surface(self.pattern(self.colors['background']))
+            context.get_source().set_extend(cairo.Extend.REPEAT)
 
         else:
             context.set_source_rgba(*self.colors['background'].tuple_rgba())
-            context.get_source().set_extend(cairo.Extend.REPEAT)
 
         context.arc( # shadow arc
             self.x_center,
@@ -801,31 +929,28 @@ class ArcGauge(Gauge):
         
         context.stroke()
 
-        if self.pattern:
-            context.set_source_surface(self.pattern(self.colors['foreground']))
+        colors = self.palette(self.colors['foreground'], len(self.elements))
+        offset = 0.0
+        for idx, element in enumerate(self.elements):
 
-        else:
-            context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-            context.get_source().set_extend(cairo.Extend.REPEAT)
+            value = monitor.normalized(element)
 
-        context.arc(
-            self.x_center,
-            self.y_center,
-            self.radius,
-            math.pi / 2,
-            math.pi / 2 + math.pi * 2 * monitor.normalized(self.address)
-        )
+            if self.combination == 'separate':
+                value /= len(self.elements)
 
-        context.stroke()
+            color = colors[idx]
+
+            self.draw_arc(context, value, color, offset=offset)
+            offset += value
 
         super(ArcGauge, self).update(context, monitor)
 
 
-class DualArcGauge(ArcGauge):
+class MirrorArcGauge(ArcGauge):
 
     def __init__(self, **kwargs):
 
-        super(DualArcGauge, self).__init__(**kwargs)
+        super(MirrorArcGauge, self).__init__(**kwargs)
 
         self.colors['foreground_second'] = self.colors['foreground'].clone()
         self.colors['foreground_second'].hue += 225
@@ -853,7 +978,7 @@ class DualArcGauge(ArcGauge):
             self.y_center,
             self.radius,
             math.pi / 2,
-            math.pi / 2 + math.pi * monitor.normalized(self.address[0])
+            math.pi / 2 + math.pi * monitor.normalized(self.elements[0])
         )
         context.stroke()
 
@@ -863,7 +988,7 @@ class DualArcGauge(ArcGauge):
             self.y_center,
             self.radius,
             math.pi / 2,
-            math.pi / 2 - math.pi * monitor.normalized(self.address[1])
+            math.pi / 2 - math.pi * monitor.normalized(self.elements[1])
         )
         context.stroke()
 
@@ -873,6 +998,7 @@ class DualArcGauge(ArcGauge):
 class PlotGauge(Gauge):
 
     points = None
+    step = None
     num_points = None
     autoscale = None
     markers = None
@@ -885,10 +1011,14 @@ class PlotGauge(Gauge):
 
         if num_points:
             self.num_points = num_points
+            self.step = self.inner_width // (num_points - 1)
         else:
-            self.num_points = self.inner_width // 8 + 1
+            self.step = 8
+            self.num_points = self.inner_width // self.step + 1
 
-        self.points = collections.deque([], self.num_points)
+        self.points = collections.OrderedDict()
+        for element in self.elements:
+            self.points[element] = collections.deque([], self.num_points)
 
         self.autoscale = autoscale
         self.markers = markers
@@ -896,10 +1026,11 @@ class PlotGauge(Gauge):
         self.grid = grid
 
         self.colors['plot_line'] = self.colors['foreground'].clone()
-        self.colors['plot_line'].alpha *= 0.5
-        
+        self.colors['plot_line'].alpha *= 0.8
+
         self.colors['plot_fill'] = self.colors['foreground'].clone()
-        self.colors['plot_fill'].alpha *= 0.25
+        if line:
+            self.colors['plot_fill'].alpha *= 0.25
 
         self.colors['grid_major'] = self.colors['plot_line'].clone()
         self.colors['grid_major'].alpha *= 0.5
@@ -915,34 +1046,43 @@ class PlotGauge(Gauge):
 
 
     def get_scale_factor(self):
-        p = max(self.points)
-        if p:
+
+        maxes = []
+        for element in self.elements:
+            maxes.append(max(self.points[element]))
+
+        p = max(maxes)
+        if p > 0:
             return 1.0 / p
         return 0.0
 
 
-    def get_points_scaled(self):
+    def get_points_scaled(self, element):
        
         scale_factor = self.get_scale_factor()
         if scale_factor == 0.0:
-            return [0.0 for _ in range(0, len(self.points))]
+            return [0.0 for _ in range(0, len(self.points[element]))]
 
         r = []
-        for amplitude in self.points:
+        for amplitude in self.points[element]:
             r.append(amplitude * scale_factor)
 
         return r
 
 
     def draw_grid(self, context, monitor):
-
+        
         scale_factor = self.get_scale_factor()
+        
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
+        context.fill()
 
         context.set_line_width(1)
         context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
         #context.set_dash([1,1])
 
-        for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, 8):
+        for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, self.step):
             context.move_to(x, self.y + self.padding)
             context.line_to(x, self.y + self.padding + self.inner_height)
         
@@ -1020,35 +1160,17 @@ class PlotGauge(Gauge):
         #context.set_dash([1,0]) # reset dash
 
 
-    def update(self, context, monitor):
-            
-        self.points.append(monitor.normalized(self.address))
-      
-        context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
-        context.fill()
-
-        if self.grid:
-            self.draw_grid(context, monitor)
-
-        if self.autoscale:
-            scale_factor = self.get_scale_factor()
-            if scale_factor == 0.0:
-                text = u"∞X"
-            else:
-                text = "%.2fX" % self.get_scale_factor()
-            render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
-        
+    def draw_plot(self, context, points, colors, offset=None):
 
         coords = []
-        if self.autoscale:
-            points = self.get_points_scaled()
-        else:
-            points = self.points
 
         for idx, amplitude in enumerate(points):
+
+            if offset:
+                amplitude += offset[idx]
+
             coords.append((
-                idx * 8 + self.padding,
+                idx * self.step + self.padding,
                 self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
@@ -1057,7 +1179,7 @@ class PlotGauge(Gauge):
 
             # draw lines
 
-            context.set_source_rgba(*self.colors['plot_line'].tuple_rgba())
+            context.set_source_rgba(*colors['plot_line'].tuple_rgba())
             context.set_line_width(2)
             #context.set_line_cap(cairo.LINE_CAP_BUTT)
 
@@ -1071,14 +1193,31 @@ class PlotGauge(Gauge):
 
         if self.pattern:
 
-            context.set_source_surface(self.pattern(self.colors['plot_fill']))
+            context.set_source_surface(self.pattern(colors['plot_fill']))
             context.get_source().set_extend(cairo.Extend.REPEAT)
             
             context.move_to(self.x + self.padding, self.y + self.padding + self.inner_height)
             for idx, (x, y) in enumerate(coords):
                 context.line_to(x, y)
 
-            context.line_to(x, self.y + self.padding + self.inner_height)
+            if offset: # "cut out" the offset at the bottom
+
+                previous_amplitude = None
+                for i, amplitude in enumerate(reversed(offset)):
+
+                    if len(offset) - i > len(points):
+                        continue # ignore x coordinates not reached yet by the graph
+
+                    if (amplitude != previous_amplitude or i == len(offset) - 1):
+
+                        offset_x = self.x + self.padding + self.inner_width - i * self.step
+                        offset_y = self.y + self.padding + self.inner_height - self.inner_height * amplitude
+
+                        context.line_to(offset_x, offset_y)
+
+            else:
+                context.line_to(x, self.y + self.padding + self.inner_height)
+
             context.close_path()
 
             context.fill()
@@ -1088,7 +1227,7 @@ class PlotGauge(Gauge):
             # place points
             for (x, y) in coords:
 
-                context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+                context.set_source_rgba(*colors['plot_marker'].tuple_rgba())
 
                 context.arc(
                     x,
@@ -1099,6 +1238,57 @@ class PlotGauge(Gauge):
                 )
             
                 context.fill()
+
+
+    def update(self, context, monitor):
+        
+        for element in self.elements:
+            self.points[element].append(monitor.normalized(element))
+      
+        if self.grid:
+            self.draw_grid(context, monitor)
+
+        if self.autoscale:
+            scale_factor = self.get_scale_factor()
+            if scale_factor == 0.0:
+                text = u"∞X"
+            else:
+                text = "%.2fX" % self.get_scale_factor()
+            render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
+        
+
+        colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
+        colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
+        colors_plot_fill = self.palette(self.colors['plot_fill'], len(self.elements))
+
+        offset = [0.0 for _ in range(0, self.num_points)]
+        for idx, element in enumerate(self.elements):
+
+            colors = {
+                'plot_marker': colors_plot_marker[idx],
+                'plot_line': colors_plot_line[idx],
+                'plot_fill': colors_plot_fill[idx]
+            }
+
+            if self.autoscale:
+                points = self.get_points_scaled(element)
+            else:
+                points = list(self.points[element])
+
+            if self.combination == 'separate':
+                self.draw_plot(context, points, colors)
+
+            elif self.combination.startswith('cumulative'):
+
+                if self.combination == 'cumulative_force':
+                    for idx in range(0, len(points)):
+                        points[idx] /= len(self.elements)
+
+                self.draw_plot(context, points, colors, offset)
+
+                for idx, value in enumerate(points):
+                    offset[idx] += value
+
 
         super(PlotGauge, self).update(context, monitor)
 
@@ -1237,71 +1427,89 @@ class Hugin(object):
         Gtk.main_quit()
 
 
+    def autosetup(self):
+
+        # this function should automatically put together a sane collection of gauges for a system, but doesn't really do that yet.
+
+        self.autoplace_gauge(
+            'cpu',
+            ArcGauge,
+            #elements=['aggregate'],
+            elements=['core_0', 'core_1', 'core_2', 'core_3'],
+            width=self.window.width, 
+            height=self.window.width,
+            stroke_width=10,
+            palette=functools.partial(palette_hue, distance=-120),
+            #palette=functools.partial(palette_value, max=1, min=0.3),
+            captions=[
+                {
+                    'text': '{aggregate:.1f}%',
+                    'position': 'center_center',
+                    'align': 'center_center',
+                    'font_size': 14
+                },
+                {
+                    'text': '{count} cores',
+                    'position': 'right_bottom',
+                    'align': 'right_bottom',
+                    'color': CONFIG_COLORS['text_minor'],
+                    'font_size': 8
+                }
+            ]
+        )
+
+        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_0'], width=self.window.width / 4, height=self.window.width / 4)
+        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
+        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
+        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
+        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, grid=False, palette=functools.partial(palette_hue, distance=-120), pattern=stripe45, autoscale=False, combination='cumulative_force', markers=False, line=True)
+        self.autoplace_gauge('cpu', RectGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=50, palette=functools.partial(palette_hue, distance=-120))
+
+        self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
+                {
+                    'text': '{percent:.1f}%',
+                    'position': 'center_center',
+                    'align': 'center_center'
+                },
+
+                {
+                    'text': '{total}',
+                    'position': 'left_top',
+                    'align': 'left_top',
+                    'color': CONFIG_COLORS['text_minor'],
+                    'font_size': 8,
+                }
+            ]
+        )
+
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=['re0.bytes_recv', 're0.bytes_sent'], pattern=stripe45, captions=[
+                {
+                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
+                    'position': 'center_center',
+                    'align': 'center_center',
+                }
+            ]
+        )
+
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=8, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'], palette=functools.partial(palette_hue, distance=-120))
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv'])
+
+        if psutil.sensors_battery() is not None:
+
+            self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=50, padding=0, captions=[
+                    {
+                        'text': '{percent}%',
+                        'position': 'right_center',
+                        'align': 'right_center',
+                    }
+                ]
+            )
+
 ## The actual setup ##
 
 hugin = Hugin()
-
+hugin.autosetup()
 # TODO: This should move into a separate file together with theme
 
-hugin.autoplace_gauge('cpu', ArcGauge, width=hugin.window.width, height=hugin.window.width, stroke_width=10, captions=[
-        {
-            'text': '{aggregate:.1f}%',
-            'position': 'center_center',
-            'align': 'center_center',
-            'font_size': 14
-        },
-        {
-            'text': '{count} cores',
-            'position': 'right_bottom',
-            'align': 'right_bottom',
-            'color': CONFIG_COLORS['text_minor'],
-            'font_size': 8
-        }
-    ]
-)
-
-hugin.autoplace_gauge('cpu', ArcGauge, address=0, width=hugin.window.width / 4, height=hugin.window.width / 4)
-hugin.autoplace_gauge('cpu', ArcGauge, address=1, width=hugin.window.width / 4, height=hugin.window.width / 4)
-hugin.autoplace_gauge('cpu', ArcGauge, address=2, width=hugin.window.width / 4, height=hugin.window.width / 4)
-hugin.autoplace_gauge('cpu', ArcGauge, address=3, width=hugin.window.width / 4, height=hugin.window.width / 4)
-hugin.autoplace_gauge('cpu', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, autoscale=False)
-
-hugin.autoplace_gauge('memory', ArcGauge, width=hugin.window.width, height=hugin.window.width, stroke_width=30, captions=[
-        {
-            'text': '{percent:.1f}%',
-            'position': 'center_center',
-            'align': 'center_center'
-        },
-
-        {
-            'text': '{total}',
-            'position': 'left_top',
-            'align': 'left_top',
-            'color': CONFIG_COLORS['text_minor'],
-            'font_size': 8,
-        }
-    ]
-)
-
-hugin.autoplace_gauge('network', DualArcGauge, width=hugin.window.width, height=hugin.window.width, address=['em0.bytes_recv', 'em0.bytes_sent'], pattern=stripe45, captions=[
-        {
-            'text': '{em0[counters][bytes_recv]}/s\n{em0[counters][bytes_sent]}/s',
-            'position': 'center_center',
-            'align': 'center_center',
-        }
-    ]
-)
-
-hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_sent')
-hugin.autoplace_gauge('network', PlotGauge, width=hugin.window.width, height=100, padding=15, pattern=stripe45, address='em0.bytes_recv')
-
-hugin.autoplace_gauge('battery', RectGauge, width=hugin.window.width, height=50, padding=0, captions=[
-        {
-            'text': '{percent}%',
-            'position': 'right_center',
-            'align': 'right_center',
-        }
-    ]
-)
 
 hugin.start()
