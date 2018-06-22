@@ -430,7 +430,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 60
+CONFIG_FPS = 3
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -1458,11 +1458,15 @@ class Hugin(object):
 
         # this function should automatically put together a sane collection of gauges for a system, but doesn't really do that yet.
 
+        cpu_num = psutil.cpu_count()
+        all_cores = ['core_%d' % x for x in range(0, cpu_num)]
+
+
         self.autoplace_gauge(
             'cpu',
             ArcGauge,
             #elements=['aggregate'],
-            elements=['core_0', 'core_1', 'core_2', 'core_3'],
+            elements=all_cores,
             width=self.window.width, 
             height=self.window.width,
             stroke_width=10,
@@ -1488,8 +1492,8 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
-        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=50)
+        self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
+        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50)
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1508,17 +1512,17 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=['re0.bytes_recv', 're0.bytes_sent'], pattern=stripe45, captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=['wlan0.bytes_recv', 'wlan0.bytes_sent'], pattern=stripe45, captions=[
                 {
-                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
+                    'text': '{wlan0.counters.bytes_recv}/s\n{wlan0.counters.bytes_sent}/s',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=171, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=171, padding=15, pattern=stripe45, elements=['wlan0.bytes_sent', 'lo0.bytes_sent'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['wlan0.bytes_recv', 'lo0.bytes_recv'])
 
         if psutil.sensors_battery() is not None:
 
