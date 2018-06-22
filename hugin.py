@@ -363,7 +363,7 @@ def render_text(context, text, x, y, align=None, color=None, font_size=None):
     if font_size is None:
         font_size = 12
 
-    font = Pango.FontDescription('Orbitron %d' % font_size)
+    font = Pango.FontDescription('Orbitron Light %d' % font_size)
 
     layout = PangoCairo.create_layout(context)
     layout.set_font_description(font)
@@ -430,7 +430,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 3
+CONFIG_FPS = 60
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -438,6 +438,7 @@ CONFIG_COLORS = {
     'text': Color(1,1,1, 0.6),
     'text_minor': Color(1,1,1, 0.3)
 }
+CONFIG_PALETTE = functools.partial(palette_hue, distance=-120) # mhh, curry…
 CONFIG_WIDTH = 200
 CONFIG_HEIGHT = 1080 - 32
 
@@ -800,7 +801,7 @@ class Gauge(object):
             self.colors['background'] = background
 
         self.pattern = pattern
-        self.palette = palette or palette_value
+        self.palette = palette or CONFIG_PALETTE
         self.combination = combination or 'separate'
 
 
@@ -935,13 +936,17 @@ class ArcGauge(Gauge):
 
             value = monitor.normalized(element)
 
-            if self.combination == 'separate':
+            if self.combination != 'cumulative':
                 value /= len(self.elements)
 
             color = colors[idx]
 
             self.draw_arc(context, value, color, offset=offset)
-            offset += value
+
+            if self.combination == 'separate':
+                offset += 1 / len(self.elements)
+            else:
+                offset += value
 
         super(ArcGauge, self).update(context, monitor)
 
@@ -1011,7 +1016,9 @@ class PlotGauge(Gauge):
 
         if num_points:
             self.num_points = num_points
-            self.step = self.inner_width // (num_points - 1)
+            self.step = self.inner_width / (num_points - 1)
+            assert int(self.step) >= 1, "num_points %d exceeds pixel density!" % num_points
+
         else:
             self.step = 8
             self.num_points = self.inner_width // self.step + 1
@@ -1101,7 +1108,7 @@ class PlotGauge(Gauge):
         context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
         #context.set_dash([1,1])
 
-        for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, self.step):
+        for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, int(self.step)):
             context.move_to(x, self.y + self.padding)
             context.line_to(x, self.y + self.padding + self.inner_height)
         
@@ -1437,6 +1444,7 @@ class Hugin(object):
 
         signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills hugin
         GLib.timeout_add(1000/CONFIG_FPS, self.tick)
+        self.tick()
         Gtk.main()
         print("\nThank you for flying with phryk evil mad sciences, LLC. Please come again.")
 
@@ -1458,8 +1466,7 @@ class Hugin(object):
             width=self.window.width, 
             height=self.window.width,
             stroke_width=10,
-            palette=functools.partial(palette_hue, distance=-120),
-            #palette=functools.partial(palette_value, max=1, min=0.3),
+            combination='cumulative_force',
             captions=[
                 {
                     'text': '{aggregate:.1f}%',
@@ -1481,8 +1488,8 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
-        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, palette=functools.partial(palette_hue, distance=-120), pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=50, palette=functools.partial(palette_hue, distance=-120))
+        self.autoplace_gauge('cpu', PlotGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
+        self.autoplace_gauge('cpu', RectGauge, elements=['core_0', 'core_1', 'core_2', 'core_3'], width=self.window.width, height=50)
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1510,8 +1517,8 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=8, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'], palette=functools.partial(palette_hue, distance=-120))
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=171, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
 
         if psutil.sensors_battery() is not None:
 
