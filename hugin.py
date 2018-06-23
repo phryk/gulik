@@ -859,7 +859,7 @@ class RectGauge(Gauge):
 
             value = monitor.normalized(element)
 
-            if self.combination == 'separate':
+            if self.combination != 'cumulative':
                 value /= len(self.elements)
 
             color = colors[idx]
@@ -867,7 +867,11 @@ class RectGauge(Gauge):
             
             context.rectangle(self.x + self.padding + self.inner_width * offset, self.y + self.padding, self.inner_width * value, self.inner_height)
             context.fill()
-            offset += value
+
+            if self.combination.startswith('cumulative'):
+                offset += value
+            else:
+                offset += 1.0 / len(self.elements)
 
         super(RectGauge, self).update(context, monitor)
 
@@ -1493,7 +1497,7 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
         self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50)
+        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, combination='cumulative_force')
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1512,17 +1516,17 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=['wlan0.bytes_recv', 'wlan0.bytes_sent'], pattern=stripe45, captions=[
+        self.autoplace_gauge('network', ArcGauge, width=self.window.width, height=self.window.width, elements=['re0.bytes_recv', 're0.bytes_sent'], captions=[
                 {
-                    'text': '{wlan0.counters.bytes_recv}/s\n{wlan0.counters.bytes_sent}/s',
+                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, num_points=171, padding=15, pattern=stripe45, elements=['wlan0.bytes_sent', 'lo0.bytes_sent'])
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['wlan0.bytes_recv', 'lo0.bytes_recv'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
 
         if psutil.sensors_battery() is not None:
 
