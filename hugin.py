@@ -723,7 +723,7 @@ class NetworkMonitor(Monitor):
             if self.interfaces[if_name]['stats']['speed']:
                 link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
             else: # speed == 0 means it couldn't be determined, fall back to 100Mbit/s
-                link_quality = float(1000 * 1024**2)
+                link_quality = float(100 * 1024**2)
 
             return (self.count_sec(if_name, key) * 8) / link_quality
 
@@ -957,13 +957,43 @@ class ArcGauge(Gauge):
 
 class MirrorArcGauge(ArcGauge):
 
+    left = None
+    right = None
+
     def __init__(self, **kwargs):
 
         super(MirrorArcGauge, self).__init__(**kwargs)
+        self.left = self.elements[0]
+        self.right = self.elements[1]
+        #self.colors['foreground_second'] = self.colors['foreground'].clone()
+        #self.colors['foreground_second'].hue += 225
 
-        self.colors['foreground_second'] = self.colors['foreground'].clone()
-        self.colors['foreground_second'].hue += 225
+    def draw_arc(self, context, value, color, offset=0.0):
 
+        value = value / 2
+        super(MirrorArcGauge, self).draw_arc(context, value, color, offset=offset)
+
+
+    def draw_arc_negative(self, context, value, color, offset=0.0):
+
+        value = value / 2
+
+        if self.pattern:
+            context.set_source_surface(self.pattern(self.colors['foreground']))
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+
+        else:
+            context.set_source_rgba(*color.tuple_rgba())
+
+        context.arc_negative(
+            self.x_center,
+            self.y_center,
+            self.radius,
+            math.pi / 2 - math.pi * offset,
+            math.pi / 2 - math.pi * (offset + value)
+        )
+
+        context.stroke()
 
     def update(self, context, monitor):
 
@@ -980,26 +1010,23 @@ class MirrorArcGauge(ArcGauge):
         )
         context.stroke()
 
+        palette = self.palette(self.colors['foreground'], count=max([len(self.left), len(self.right)]))
+        for idx, element in enumerate(self.left):
 
-        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-        context.arc(
-            self.x_center,
-            self.y_center,
-            self.radius,
-            math.pi / 2,
-            math.pi / 2 + math.pi * monitor.normalized(self.elements[0])
-        )
-        context.stroke()
+            value = monitor.normalized(element)
+            color = palette[idx]
 
-        context.set_source_rgba(*self.colors['foreground_second'].tuple_rgba())
-        context.arc_negative(
-            self.x_center,
-            self.y_center,
-            self.radius,
-            math.pi / 2,
-            math.pi / 2 - math.pi * monitor.normalized(self.elements[1])
-        )
-        context.stroke()
+            self.draw_arc(context, value, color)
+
+
+        palette.reverse()
+        for idx, element in enumerate(self.right):
+            
+            value = monitor.normalized(element)
+            color = palette[idx]
+
+            self.draw_arc_negative(context, value, color)
+
 
         super(ArcGauge, self).update(context, monitor)
 
@@ -1497,7 +1524,7 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
         self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, combination='cumulative_force')
+        self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1516,17 +1543,17 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', ArcGauge, width=self.window.width, height=self.window.width, elements=['re0.bytes_recv', 're0.bytes_sent'], captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['em0.bytes_recv', 'lo0.bytes_recv'], ['em0.bytes_sent', 'lo0.bytes_sent']], captions=[
                 {
-                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
+                    'text': '{lo0.counters.bytes_recv}/s\n{lo0.counters.bytes_sent}/s',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
 
         if psutil.sensors_battery() is not None:
 
