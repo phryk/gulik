@@ -976,7 +976,7 @@ class MirrorArcGauge(ArcGauge):
 
     def draw_arc_negative(self, context, value, color, offset=0.0):
 
-        value = value / 2
+        #value = value / 2
 
         if self.pattern:
             context.set_source_surface(self.pattern(self.colors['foreground']))
@@ -1543,17 +1543,17 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['em0.bytes_recv', 'lo0.bytes_recv'], ['em0.bytes_sent', 'lo0.bytes_sent']], captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], captions=[
                 {
-                    'text': '{lo0.counters.bytes_recv}/s\n{lo0.counters.bytes_sent}/s',
+                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
+        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
 
         if psutil.sensors_battery() is not None:
 
