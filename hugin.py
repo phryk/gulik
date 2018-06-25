@@ -288,6 +288,24 @@ def palette_value(base, count, min=None, max=None):
     return palette
 
 
+def pretty_si(number):
+
+    """
+    Return a SI-postfixed string representation of a number (int or float).
+    """
+
+    postfixes = ['', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']
+
+    value = number
+    for postfix in postfixes:
+        if value / 1000.0 < 1:
+            break
+
+        value /= 1000.0
+
+    return "%.2f%s" % (value, postfix)
+
+
 def pretty_bytes(bytecount):
 
     """
@@ -430,7 +448,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 3
+CONFIG_FPS = 1
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -723,7 +741,7 @@ class NetworkMonitor(Monitor):
             if self.interfaces[if_name]['stats']['speed']:
                 link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
             else: # speed == 0 means it couldn't be determined, fall back to 100Mbit/s
-                link_quality = float(100 * 1024**2)
+                link_quality = float(1000 * 1024**2)
 
             return (self.count_sec(if_name, key) * 8) / link_quality
 
@@ -776,7 +794,7 @@ class Gauge(object):
     colors = None
     pattern = None
     palette = None # function to generate color palettes with
-    combination = None # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_forced'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
+    combination = None # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
     def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None):
 
@@ -815,13 +833,24 @@ class Gauge(object):
         return self.height - 2 * self.padding
 
 
-    def update(self, context, monitor):
+    def set_brush(self, context, color):
 
-        """
-        parameters:
-            context: cairo context of the window
-            monitor: A Monitor object holding relevant data and helper functions
-        """
+        if self.pattern:
+            context.set_source_surface(self.pattern(color))
+            context.get_source().set_extend(cairo.Extend.REPEAT)
+
+        else:
+            context.set_source_rgba(*color.tuple_rgba())
+
+
+    def draw_background(self, context):
+
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
+        context.fill()
+
+
+    def draw_captions(self, context, monitor):
 
         for caption in self.captions:
 
@@ -845,16 +874,34 @@ class Gauge(object):
             render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
 
+    def update(self, context, monitor):
+
+        """
+        parameters:
+            context: cairo context of the window
+            monitor: A Monitor object holding relevant data and helper functions
+        """
+
+        raise NotImplementedError("%s.update not implemented!" % self.__class__.__name__)
+
+
 class RectGauge(Gauge):
+
+    def draw_rect(self, context, value, color, offset=0.0):
+
+            self.set_brush(context, color)
+            
+            context.rectangle(self.x + self.padding + self.inner_width * offset, self.y + self.padding, self.inner_width * value, self.inner_height)
+            context.fill()
+
 
     def update(self, context, monitor):
         
-        context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
-        context.fill()
-
         colors = self.palette(self.colors['foreground'], len(self.elements))
         offset = 0.0
+
+        self.draw_background(context)
+
         for idx, element in enumerate(self.elements):
 
             value = monitor.normalized(element)
@@ -863,17 +910,72 @@ class RectGauge(Gauge):
                 value /= len(self.elements)
 
             color = colors[idx]
-            context.set_source_rgba(*color.tuple_rgba())
-            
-            context.rectangle(self.x + self.padding + self.inner_width * offset, self.y + self.padding, self.inner_width * value, self.inner_height)
-            context.fill()
+
+            self.draw_rect(context, value, color, offset)
 
             if self.combination.startswith('cumulative'):
                 offset += value
             else:
                 offset += 1.0 / len(self.elements)
 
-        super(RectGauge, self).update(context, monitor)
+        self.draw_captions(context, monitor)
+
+
+class MirrorRectGauge(Gauge):
+
+    def __init__(self, **kwargs):
+
+        super(MirrorRectGauge, self).__init__(**kwargs)
+        self.x_center = self.x + self.width / 2
+        self.left = self.elements[0]
+        self.right = self.elements[1]
+        self.draw_left = self.draw_rect_negative
+        self.draw_right = self.draw_rect
+
+    
+    def draw_rect(self, context, value, color, offset=0.0):
+
+            self.set_brush(context, color)
+            
+            context.rectangle(self.x_center + self.inner_width / 2 * offset, self.y + self.padding, self.inner_width / 2 * value, self.inner_height)
+            context.fill()
+
+
+    def draw_rect_negative(self, context, value, color, offset=0.0):
+
+            self.set_brush(context, color)
+            
+            context.rectangle(self.x_center - self.inner_width / 2 * offset - self.inner_width / 2 * value, self.y + self.padding, self.inner_width / 2 * value, self.inner_height)
+            context.fill()
+
+
+    def update(self, context, monitor):
+
+        colors = self.palette(self.colors['foreground'], max(len(self.left), len(self.right)))
+
+        self.draw_background(context)
+
+        for elements, drawer in ((self.left, self.draw_left), (self.right, self.draw_right)):
+
+            offset = 0.0
+
+            for idx, element in enumerate(elements):
+                
+                value = monitor.normalized(element)
+
+                if self.combination != 'cumulative':
+                    value /= len(elements)
+
+                color = colors[idx]
+
+                drawer(context, value, color, offset)
+
+                if self.combination.startswith('cumulative'):
+                    offset += value
+                else:
+                    offset += 1.0 / len(elements)
+
+        self.draw_captions(context, monitor)
 
 
 class ArcGauge(Gauge):
@@ -894,12 +996,10 @@ class ArcGauge(Gauge):
 
     def draw_arc(self, context, value, color, offset=0.0):
 
-        if self.pattern:
-            context.set_source_surface(self.pattern(self.colors['foreground']))
-            context.get_source().set_extend(cairo.Extend.REPEAT)
+        context.set_line_width(self.stroke_width)
+        context.set_line_cap(cairo.LINE_CAP_BUTT)
 
-        else:
-            context.set_source_rgba(*color.tuple_rgba())
+        self.set_brush(context, color)
 
         context.arc(
             self.x_center,
@@ -911,28 +1011,15 @@ class ArcGauge(Gauge):
 
         context.stroke()
 
+    
+    def draw_background(self, context):
+
+        self.draw_arc(context, 1, self.colors['background'])
+
 
     def update(self, context, monitor):
 
-        context.set_line_width(self.stroke_width)
-        context.set_line_cap(cairo.LINE_CAP_BUTT)
-
-        if self.pattern:
-            context.set_source_surface(self.pattern(self.colors['background']))
-            context.get_source().set_extend(cairo.Extend.REPEAT)
-
-        else:
-            context.set_source_rgba(*self.colors['background'].tuple_rgba())
-
-        context.arc( # shadow arc
-            self.x_center,
-            self.y_center,
-            self.radius,
-            0,
-            math.pi * 2
-        )
-        
-        context.stroke()
+        self.draw_background(context)
 
         colors = self.palette(self.colors['foreground'], len(self.elements))
         offset = 0.0
@@ -952,10 +1039,10 @@ class ArcGauge(Gauge):
             else:
                 offset += value
 
-        super(ArcGauge, self).update(context, monitor)
+        self.draw_captions(context, monitor)
 
 
-class MirrorArcGauge(ArcGauge):
+class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
     left = None
     right = None
@@ -965,25 +1052,23 @@ class MirrorArcGauge(ArcGauge):
         super(MirrorArcGauge, self).__init__(**kwargs)
         self.left = self.elements[0]
         self.right = self.elements[1]
-        #self.colors['foreground_second'] = self.colors['foreground'].clone()
-        #self.colors['foreground_second'].hue += 225
+        self.draw_left = self.draw_arc_negative
+        self.draw_right = self.draw_arc
+
 
     def draw_arc(self, context, value, color, offset=0.0):
 
-        value = value / 2
+        value /= 2
+        offset /= 2
+
         super(MirrorArcGauge, self).draw_arc(context, value, color, offset=offset)
 
 
     def draw_arc_negative(self, context, value, color, offset=0.0):
 
-        #value = value / 2
-
-        if self.pattern:
-            context.set_source_surface(self.pattern(self.colors['foreground']))
-            context.get_source().set_extend(cairo.Extend.REPEAT)
-
-        else:
-            context.set_source_rgba(*color.tuple_rgba())
+        context.set_line_width(self.stroke_width)
+        context.set_line_cap(cairo.LINE_CAP_BUTT)
+        self.set_brush(context, color)
 
         context.arc_negative(
             self.x_center,
@@ -995,40 +1080,10 @@ class MirrorArcGauge(ArcGauge):
 
         context.stroke()
 
-    def update(self, context, monitor):
 
-        context.set_line_width(self.stroke_width)
-        context.set_line_cap(cairo.LINE_CAP_BUTT)
+    def draw_background(self, context):
 
-        context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.arc( # shadow arc
-            self.x_center,
-            self.y_center,
-            self.radius,
-            0,
-            math.pi * 2
-        )
-        context.stroke()
-
-        palette = self.palette(self.colors['foreground'], count=max([len(self.left), len(self.right)]))
-        for idx, element in enumerate(self.left):
-
-            value = monitor.normalized(element)
-            color = palette[idx]
-
-            self.draw_arc(context, value, color)
-
-
-        palette.reverse()
-        for idx, element in enumerate(self.right):
-            
-            value = monitor.normalized(element)
-            color = palette[idx]
-
-            self.draw_arc_negative(context, value, color)
-
-
-        super(ArcGauge, self).update(context, monitor)
+        self.draw_arc(context, 2, self.colors['background'])
 
 
 class PlotGauge(Gauge):
@@ -1040,6 +1095,7 @@ class PlotGauge(Gauge):
     markers = None
     line = None
     grid = None
+    grid_height = None
 
     def __init__(self, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
@@ -1054,14 +1110,13 @@ class PlotGauge(Gauge):
             self.step = 8
             self.num_points = self.inner_width // self.step + 1
 
-        self.points = collections.OrderedDict()
-        for element in self.elements:
-            self.points[element] = collections.deque([], self.num_points)
+        self.prepare_points() # creates self.points with a deque for every plot
 
         self.autoscale = autoscale
         self.markers = markers
         self.line = line
         self.grid = grid
+        self.grid_height = self.inner_height
 
         self.colors['plot_line'] = self.colors['foreground'].clone()
         self.colors['plot_line'].alpha *= 0.8
@@ -1083,7 +1138,17 @@ class PlotGauge(Gauge):
         self.colors['caption_scale'].alpha *= 0.6
 
 
-    def get_scale_factor(self):
+    def prepare_points(self):
+
+        self.points = collections.OrderedDict()
+        for element in self.elements:
+            self.points[element] = collections.deque([], self.num_points)
+
+
+    def get_scale_factor(self, elements=None):
+
+        if elements is None:
+            elements = self.elements
 
         if self.combination == 'cumulative_force':
 
@@ -1091,21 +1156,22 @@ class PlotGauge(Gauge):
             for idx in range(0, self.num_points):
 
                 value = 0.0
-                for element in self.elements:
+                for element in elements:
 
                     try:
                         value += self.points[element][idx]
                     except IndexError as e:
                         continue # means self.points deques aren't filled completely yet
 
-                    cumulative_points.append(value / len(self.elements))
+                    cumulative_points.append(value / len(elements))
 
             p = max(cumulative_points)
 
         else:
             maxes = []
-            for element in self.elements:
-                maxes.append(max(self.points[element]))
+            for element in elements:
+                if len(self.points[element]):
+                    maxes.append(max(self.points[element]))
 
             p = max(maxes)
 
@@ -1114,9 +1180,12 @@ class PlotGauge(Gauge):
         return 0.0
 
 
-    def get_points_scaled(self, element):
-       
-        scale_factor = self.get_scale_factor()
+    def get_points_scaled(self, element, elements=None):
+
+        if elements is None:
+            elements = self.elements
+
+        scale_factor = self.get_scale_factor(elements)
         if scale_factor == 0.0:
             return [0.0 for _ in range(0, len(self.points[element]))]
 
@@ -1127,13 +1196,12 @@ class PlotGauge(Gauge):
         return r
 
 
-    def draw_grid(self, context, monitor):
+    def draw_grid(self, context, monitor, elements=None):
+      
+        if elements is None:
+            elements = self.elements
         
-        scale_factor = self.get_scale_factor()
-        
-        context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
-        context.fill()
+        scale_factor = self.get_scale_factor(elements)
 
         context.set_line_width(1)
         context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
@@ -1141,23 +1209,21 @@ class PlotGauge(Gauge):
 
         for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, int(self.step)):
             context.move_to(x, self.y + self.padding)
-            context.line_to(x, self.y + self.padding + self.inner_height)
+            context.line_to(x, self.y + self.padding + self.grid_height)
         
         context.stroke()
-
         
         if not self.autoscale:
 
             for i in range(0, 110, 10): # 0,10,20..100
                 
                 value = i / 100.0
-                y = self.y + self.padding + self.inner_height - self.inner_height * value
+                y = self.y + self.padding + self.grid_height - self.grid_height * value
 
                 context.move_to(self.x + self.padding, y)
                 context.line_to(self.x + self.padding + self.inner_width, y)
 
             context.stroke()
-
 
         elif scale_factor > 0:
             
@@ -1171,7 +1237,7 @@ class PlotGauge(Gauge):
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 1000.0 * scale_factor
-                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+                    y = self.y + self.padding + self.grid_height - self.grid_height * value
 
                     if y < self.y + self.padding:
                         break # stop the loop if guides would be placed outside the gauge
@@ -1188,7 +1254,7 @@ class PlotGauge(Gauge):
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 100.0 * scale_factor
-                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+                    y = self.y + self.padding + self.grid_height - self.grid_height * value
 
                     if y < self.y + self.padding:
                         break # stop the loop if guides would be placed outside the gauge
@@ -1204,7 +1270,7 @@ class PlotGauge(Gauge):
                 for i in range(0, 110, 10): # 0,10,20..100
                     
                     value = i / 100.0 * scale_factor
-                    y = self.y + self.padding + self.inner_height - self.inner_height * value
+                    y = self.y + self.padding + self.grid_height - self.grid_height * value
 
                     if y < self.y + self.padding:
                         break # stop the loop if guides would be placed outside the gauge
@@ -1302,6 +1368,8 @@ class PlotGauge(Gauge):
         for element in self.elements:
             self.points[element].append(monitor.normalized(element))
       
+        self.draw_background(context)
+
         if self.grid:
             self.draw_grid(context, monitor)
 
@@ -1310,7 +1378,7 @@ class PlotGauge(Gauge):
             if scale_factor == 0.0:
                 text = u"∞X"
             else:
-                text = "%.2fX" % self.get_scale_factor()
+                text = "%sX" % pretty_si(self.get_scale_factor())
             render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
         
 
@@ -1347,8 +1415,139 @@ class PlotGauge(Gauge):
                     offset[idx] += value
 
 
-        super(PlotGauge, self).update(context, monitor)
+        self.draw_captions(context, monitor)
 
+
+class MirrorPlotGauge(PlotGauge):
+
+    y_center = None
+    scale_lock = None # bool, whether to use the same scale for up and down
+
+    def __init__(self, scale_lock=True, **kwargs):
+
+        super(MirrorPlotGauge, self).__init__(**kwargs)
+        self.y_center = self.y + self.height / 2
+        self.up = self.elements[0]
+        self.down = self.elements[1]
+        self.scale_lock = scale_lock
+        self.grid_height /= 2
+
+
+    def prepare_points(self):
+
+        self.points = collections.OrderedDict()
+
+        for elements in self.elements: # self.elements is a list like [[<elements_up>], [<elements_down>]]
+            for element in elements:
+                self.points[element] = collections.deque([], self.num_points)
+
+
+    def get_scale_factor(self, elements=None):
+
+        if self.scale_lock:
+            elements = self.up + self.down # same scale for both, needs to fit maximum value over BOTH
+
+        return super(MirrorPlotGauge, self).get_scale_factor(elements)
+
+
+    def draw_grid(self, context, monitor, elements=None):
+        
+        context.set_line_width(1)
+        context.set_source_rgba(*self.colors['grid_milli'].tuple_rgba())
+
+        context.move_to(self.x + self.padding, self.y_center)
+        context.line_to(self.x + self.padding + self.inner_width, self.y_center)
+        context.stroke()
+
+        if elements == self.up:
+            context.translate(0, self.grid_height)
+            super(MirrorPlotGauge, self).draw_grid(context, monitor, elements=elements)
+            context.translate(0, -self.grid_height)
+
+        else:
+            super(MirrorPlotGauge, self).draw_grid(context, monitor, elements=elements)
+
+
+    def draw_plot(self, context, points, colors, offset=None):
+
+        points = [x/2 for x in points]
+
+        if not offset is None:
+            offset =[x/2 for x in offset]
+
+        context.translate(0, -self.inner_height / 2)
+        super(MirrorPlotGauge, self).draw_plot(context, points, colors, offset=offset)
+        context.translate(0, self.inner_height / 2)
+
+
+    def draw_plot_negative(self, context, points, colors, offset=None):
+
+        points = [-x for x in points]
+        self.draw_plot(context, points, colors, offset=offset)
+
+
+    def update(self, context, monitor):
+
+        # TODO: This is mostly a copy-paste of PlotGauge.update, needs moar DRY.
+
+        self.draw_background(context)
+
+        for elements, drawer in ((self.up, self.draw_plot), (self.down, self.draw_plot_negative)):
+
+            for element in elements:
+                self.points[element].append(monitor.normalized(element))
+          
+            if self.grid:
+                self.draw_grid(context, monitor, elements)
+
+            if self.autoscale:
+                scale_factor = self.get_scale_factor(elements)
+                if scale_factor == 0.0:
+                    text = u"∞X"
+                else:
+                    text = "%sX" % pretty_si(self.get_scale_factor(elements))
+
+                if elements == self.up:
+                    render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
+                elif not self.scale_lock: # don't show 'down' scalefactor if it's locked
+                    render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
+            
+
+            colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
+            colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
+            colors_plot_fill = self.palette(self.colors['plot_fill'], len(self.elements))
+
+            offset = [0.0 for _ in range(0, self.num_points)]
+            for idx, element in enumerate(elements):
+
+                colors = {
+                    'plot_marker': colors_plot_marker[idx],
+                    'plot_line': colors_plot_line[idx],
+                    'plot_fill': colors_plot_fill[idx]
+                }
+
+                if self.autoscale:
+                    points = self.get_points_scaled(element, elements)
+                else:
+                    points = list(self.points[element])
+
+                if self.combination == 'separate':
+                    drawer(context, points, colors)
+
+                elif self.combination.startswith('cumulative'):
+
+                    if self.combination == 'cumulative_force':
+                        for idx in range(0, len(points)):
+                            points[idx] /= len(self.elements)
+
+                    drawer(context, points, colors, offset)
+
+                    for idx, value in enumerate(points):
+                        offset[idx] += value
+
+
+        self.draw_captions(context, monitor)
+    
 
 class Hugin(object):
 
@@ -1524,7 +1723,8 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
         self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
+        #self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
+        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, combination='cumulative_force')
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1543,7 +1743,7 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
                 {
                     'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
                     'position': 'center_center',
@@ -1552,8 +1752,10 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
 
         if psutil.sensors_battery() is not None:
 
