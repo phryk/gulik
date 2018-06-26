@@ -450,7 +450,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 3
+CONFIG_FPS = 30
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -804,8 +804,12 @@ class NetworkMonitor(Monitor):
 
             data[if_name] = DotDict()
             data[if_name]['addrs'] = DotDict()
+            all_addrs = []
             for idx, addr in enumerate(self.interfaces[if_name]['addrs']):
                 data[if_name]['addrs'][str(idx)] = addr
+                all_addrs.append(addr.address)
+
+            data[if_name]['all_addrs'] = u"\n".join(all_addrs)
 
             data[if_name]['stats'] = DotDict(self.interfaces[if_name]['stats'])
 
@@ -938,7 +942,7 @@ class Gauge(object):
         raise NotImplementedError("%s.update not implemented!" % self.__class__.__name__)
 
 
-class TextGauge(Gauge):
+class MarqueeGauge(Gauge):
 
     text = None # the text to be rendered, a format string passed to monitor.caption
     font_size = None # the text size
@@ -951,7 +955,7 @@ class TextGauge(Gauge):
         if 'foreground' not in kwargs:
             kwargs['foreground'] = CONFIG_COLORS['text']
 
-        super(TextGauge, self).__init__(**kwargs)
+        super(MarqueeGauge, self).__init__(**kwargs)
         self.text = text
         self.speed = speed
         self.font_size = self.inner_height
@@ -1841,7 +1845,7 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
         self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
         #self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
+        #self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1860,21 +1864,22 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['em0.bytes_recv', 'lo0.bytes_recv'], ['em0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
                 {
-                    'text': '{re0.counters.bytes_recv}/s\n{re0.counters.bytes_sent}/s',
+                    #ä'text': '{em0.counters.bytes_recv}/s\n{em0.counters.bytes_sent}/s',
+                    'text': '{em0.all_addrs}',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['em0.bytes_sent', 'lo0.bytes_sent'], ['em0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
 
-        self.autoplace_gauge('network', TextGauge, width=self.window.width, height=45, padding=15, text='{aggregate.counters.bytes_recv}')
+        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='{aggregate.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL')
 
         self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
         
