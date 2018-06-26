@@ -398,6 +398,8 @@ def render_text(context, text, x, y, align=None, color=None, font_size=None):
 
     context.translate(-x - x_offset, -y - y_offset)
 
+    return size
+
 
 ## FILLS ##
 def stripe45(color):
@@ -448,7 +450,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 1
+CONFIG_FPS = 3
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -680,6 +682,7 @@ class NetworkMonitor(Monitor):
 
     collector_type = NetworkCollector
     interfaces = None
+    aggregate = None
 
 
     def __init__(self):
@@ -689,17 +692,31 @@ class NetworkMonitor(Monitor):
         self.interfaces = collections.OrderedDict()
 
         if CONFIG_FPS < 2:
-            deque_len = 2
+            deque_len = 2 # we need a minimum of 2 so we can get a difference
         else:
-            deque_len = CONFIG_FPS
-        
+            deque_len = CONFIG_FPS # max size equal fps means this holds data of only the last second
+
+        keys = ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']
+
         for if_name in psutil.net_if_stats().keys():
-                self.interfaces[if_name] = {}
-                self.interfaces[if_name]['addrs'] = {}
-                self.interfaces[if_name]['stats'] = {}
-                self.interfaces[if_name]['counters'] = {}
-                for key in ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']:
-                    self.interfaces[if_name]['counters'][key] = collections.deque([], deque_len) # max size equal fps means this holds data of only the last second
+
+            self.interfaces[if_name] = {
+                'addrs': {},
+                'stats': {},
+                'counters': {}
+            }
+            for key in keys:
+                self.interfaces[if_name]['counters'][key] = collections.deque([], deque_len)
+
+        self.aggregate = {
+            'if_count': len(self.interfaces),
+            'if_up': 0,
+            'speed': 0, # aggregate link speed
+            'counters': {}
+        }
+
+        for key in keys:
+            self.aggregate['counters'][key] = collections.deque([], deque_len)
 
 
     def run(self):
@@ -707,13 +724,28 @@ class NetworkMonitor(Monitor):
         while self.collector.is_alive():
             data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
             self.data = data
-            for if_name, if_info in self.interfaces.items():
-                
-                for key, deque in if_info['counters'].items():
-                    deque.append(self.data['counters'][if_name]._asdict()[key])
-                
+            
+            aggregates = {}
+            for key in self.aggregate['counters']:
+                #self.aggregate['counters'][k] = []
+                aggregates[key] = 0
+
+            self.aggregate['speed'] = 0
+            for if_name, if_data in self.interfaces.items():
+               
+                for key, deque in if_data['counters'].items():
+                    value = self.data['counters'][if_name]._asdict()[key]
+                    deque.append(value)
+                    aggregates[key] += value
                 self.interfaces[if_name]['stats'] = self.data['stats'][if_name]._asdict()
+                if self.interfaces[if_name]['stats']['speed'] == 0:
+                    self.interfaces[if_name]['stats']['speed'] = 1000 # assume gbit speed per default
+
+                self.aggregate['speed'] += self.interfaces[if_name]['stats']['speed']
                 self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
+
+            for key, value in aggregates.items():
+                self.aggregate['counters'][key].append(value)
 
 
     def count_sec(self, interface, key):
@@ -723,7 +755,10 @@ class NetworkMonitor(Monitor):
             EXAMPLE: self.count_sec('eth0', 'bytes_sent') will return count of bytes sent in the last second
         """
 
-        deque = self.interfaces[interface]['counters'][key]
+        if interface == 'aggregate':
+            deque = self.aggregate['counters'][key]
+        else:
+            deque = self.interfaces[interface]['counters'][key]
         
         if CONFIG_FPS < 2:
             return (deque[-1] - deque[0]) / CONFIG_FPS # fps < 1 means data covers 1/fps seconds
@@ -736,32 +771,50 @@ class NetworkMonitor(Monitor):
 
         if_name, key = element.split('.')
 
-        if len(self.data):
+        if if_name == 'aggregate':
+            if len(self.aggregate['counters'][key]) >= 2:
+                link_quality = float(self.aggregate['speed'] * 1024**2)
+                return (self.count_sec(if_name, key) * 8) / link_quality
 
-            if self.interfaces[if_name]['stats']['speed']:
-                link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
-            else: # speed == 0 means it couldn't be determined, fall back to 100Mbit/s
-                link_quality = float(1000 * 1024**2)
+        elif len(self.interfaces[if_name]['counters'][key]) >= 2:
+            link_quality = float(self.interfaces[if_name]['stats']['speed'] * 1024**2)
 
             return (self.count_sec(if_name, key) * 8) / link_quality
+
+        return 0 # only happens if we have less than 2 datapoints in which case we can't establish used bandwidth
 
 
     def caption(self, fmt):
         
         data = {}
 
+        data['aggregate'] = DotDict()
+        data['aggregate']['if_count'] = self.aggregate['if_count']
+        data['aggregate']['if_up'] = self.aggregate['if_up']
+        data['aggregate']['speed'] = self.aggregate['speed']
+        data['aggregate']['counters'] = DotDict()
+
+        for key in self.aggregate['counters'].keys():
+
+            data['aggregate']['counters'][key] = self.count_sec('aggregate', key)
+            if key.startswith('bytes'):
+                data['aggregate']['counters'][key] = pretty_bits(data['aggregate']['counters'][key])
+
         for if_name in self.interfaces.keys():
 
             data[if_name] = DotDict()
-            data[if_name]['addrs'] = self.interfaces[if_name]['addrs']
+            data[if_name]['addrs'] = DotDict()
+            for idx, addr in enumerate(self.interfaces[if_name]['addrs']):
+                data[if_name]['addrs'][str(idx)] = addr
+
             data[if_name]['stats'] = DotDict(self.interfaces[if_name]['stats'])
 
             data[if_name]['counters'] = DotDict()
-            for k in self.interfaces[if_name]['counters'].keys():
+            for key in self.interfaces[if_name]['counters'].keys():
 
-                data[if_name]['counters'][k] = self.count_sec(if_name, k)
-                if k.startswith('bytes'):
-                    data[if_name]['counters'][k] = pretty_bits(data[if_name]['counters'][k])
+                data[if_name]['counters'][key] = self.count_sec(if_name, key)
+                if key.startswith('bytes'):
+                    data[if_name]['counters'][key] = pretty_bits(data[if_name]['counters'][key])
 
         return fmt.format(**data)
 
@@ -883,6 +936,70 @@ class Gauge(object):
         """
 
         raise NotImplementedError("%s.update not implemented!" % self.__class__.__name__)
+
+
+class TextGauge(Gauge):
+
+    text = None # the text to be rendered, a format string passed to monitor.caption
+    font_size = None # the text size
+    direction = None
+    offset = None
+    step = None # offset step per frame
+
+    def __init__(self, text, speed=25, **kwargs):
+        
+        if 'foreground' not in kwargs:
+            kwargs['foreground'] = CONFIG_COLORS['text']
+
+        super(TextGauge, self).__init__(**kwargs)
+        self.text = text
+        self.speed = speed
+        self.font_size = self.inner_height
+        self.direction = 'left'
+        self.offset = 0.0
+        self.step = speed / CONFIG_FPS # i.e. speed in pixel/s
+
+
+
+    def update(self, context, monitor):
+        
+        text = monitor.caption(self.text)
+
+        context.save()
+        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
+        context.clip()
+
+        context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
+        font = Pango.FontDescription('Orbitron Light %d' % self.font_size)
+
+        layout = PangoCairo.create_layout(context)
+        layout.set_font_description(font)
+        layout.set_text(text, -1)
+        
+        size = layout.get_pixel_size()
+        max_offset = size[0] - self.inner_width
+
+        if max_offset <= 0:
+            self.offset = 0
+
+        context.translate(self.x + self.padding - self.offset, self.y + self.padding)
+
+        PangoCairo.update_layout(context, layout)
+        PangoCairo.show_layout(context, layout)
+
+        context.restore()
+
+        if self.direction == 'left':
+            self.offset += self.step
+            if self.offset > max_offset:
+                self.direction = 'right'
+                self.offset = max_offset
+
+        else:
+            self.offset -= self.step
+            if self.offset < 0:
+                self.direction = 'left'
+                self.offset = 0
 
 
 class RectGauge(Gauge):
@@ -1724,7 +1841,7 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
         self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
         #self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
-        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, combination='cumulative_force')
+        self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
 
         self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
                 {
@@ -1756,6 +1873,11 @@ class Hugin(object):
         #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
 
         self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+
+        self.autoplace_gauge('network', TextGauge, width=self.window.width, height=45, padding=15, text='{aggregate.counters.bytes_recv}')
+
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+        
 
         if psutil.sensors_battery() is not None:
 
