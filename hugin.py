@@ -22,17 +22,6 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 class Color(object):
 
-    red = None
-    green = None
-    blue = None
-
-    hue = None
-    saturation = None
-    value = None
-
-    alpha = None
-
-
     def __init__(self, red=None, green=None, blue=None, alpha=None, hue=None, saturation=None, value=None):
 
         rgb_passed = bool(red)|bool(green)|bool(blue)
@@ -428,10 +417,6 @@ def stripe45(color):
 #
 #    """ Periodically forces a window to redraw """
 #
-#    daemon = True
-#    target = None
-#    interval = None
-#
 #    def __init__(self, target, hz):
 #        
 #        super(PeriodicCall, self).__init__()
@@ -450,7 +435,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 30
+CONFIG_FPS = 6
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -681,9 +666,6 @@ class MemoryMonitor(Monitor):
 class NetworkMonitor(Monitor):
 
     collector_type = NetworkCollector
-    interfaces = None
-    aggregate = None
-
 
     def __init__(self):
 
@@ -798,7 +780,7 @@ class NetworkMonitor(Monitor):
 
             data['aggregate']['counters'][key] = self.count_sec('aggregate', key)
             if key.startswith('bytes'):
-                data['aggregate']['counters'][key] = pretty_bits(data['aggregate']['counters'][key])
+                data['aggregate']['counters'][key] = pretty_bits(data['aggregate']['counters'][key]) + '/s'
 
         for if_name in self.interfaces.keys():
 
@@ -818,7 +800,7 @@ class NetworkMonitor(Monitor):
 
                 data[if_name]['counters'][key] = self.count_sec(if_name, key)
                 if key.startswith('bytes'):
-                    data[if_name]['counters'][key] = pretty_bits(data[if_name]['counters'][key])
+                    data[if_name]['counters'][key] = pretty_bits(data[if_name]['counters'][key]) + '/s'
 
         return fmt.format(**data)
 
@@ -840,18 +822,6 @@ class BatteryMonitor(Monitor):
 ## Gauges ##
 
 class Gauge(object):
-
-    x = None
-    y = None
-    width = None
-    height = None
-    padding = None
-    elements = None
-    captions = None
-    colors = None
-    pattern = None
-    palette = None # function to generate color palettes with
-    combination = None # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
     def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None):
 
@@ -876,8 +846,10 @@ class Gauge(object):
             self.colors['background'] = background
 
         self.pattern = pattern
-        self.palette = palette or CONFIG_PALETTE
-        self.combination = combination or 'separate'
+        self.palette = palette or CONFIG_PALETTE # function to generate color palettes with
+
+        self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
+
 
 
     @property
@@ -944,25 +916,20 @@ class Gauge(object):
 
 class MarqueeGauge(Gauge):
 
-    text = None # the text to be rendered, a format string passed to monitor.caption
-    font_size = None # the text size
-    direction = None
-    offset = None
-    step = None # offset step per frame
-
     def __init__(self, text, speed=25, **kwargs):
         
         if 'foreground' not in kwargs:
             kwargs['foreground'] = CONFIG_COLORS['text']
 
         super(MarqueeGauge, self).__init__(**kwargs)
-        self.text = text
+        self.text = text # the text to be rendered, a format string passed to monitor.caption
+        self.previous_text = '' # to be able to detect change
+
         self.speed = speed
         self.font_size = self.inner_height
         self.direction = 'left'
         self.offset = 0.0
         self.step = speed / CONFIG_FPS # i.e. speed in pixel/s
-
 
 
     def update(self, context, monitor):
@@ -993,7 +960,12 @@ class MarqueeGauge(Gauge):
 
         context.restore()
 
-        if self.direction == 'left':
+        if text != self.previous_text:
+            # reset on text change
+            self.direction = 'left'
+            self.offset = 0
+
+        elif self.direction == 'left':
             self.offset += self.step
             if self.offset > max_offset:
                 self.direction = 'right'
@@ -1004,6 +976,8 @@ class MarqueeGauge(Gauge):
             if self.offset < 0:
                 self.direction = 'left'
                 self.offset = 0
+
+        self.previous_text = text
 
 
 class RectGauge(Gauge):
@@ -1101,11 +1075,6 @@ class MirrorRectGauge(Gauge):
 
 class ArcGauge(Gauge):
 
-    stroke_width = None
-    radius = None
-    x_center = None
-    y_center = None
-
     def __init__(self, stroke_width=5, **kwargs):
 
         super(ArcGauge, self).__init__(**kwargs)
@@ -1165,9 +1134,6 @@ class ArcGauge(Gauge):
 
 class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
-    left = None
-    right = None
-
     def __init__(self, **kwargs):
 
         super(MirrorArcGauge, self).__init__(**kwargs)
@@ -1208,15 +1174,6 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
 
 class PlotGauge(Gauge):
-
-    points = None
-    step = None
-    num_points = None
-    autoscale = None
-    markers = None
-    line = None
-    grid = None
-    grid_height = None
 
     def __init__(self, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
@@ -1541,8 +1498,7 @@ class PlotGauge(Gauge):
 
 class MirrorPlotGauge(PlotGauge):
 
-    y_center = None
-    scale_lock = None # bool, whether to use the same scale for up and down
+    #scale_lock = None # bool, whether to use the same scale for up and down
 
     def __init__(self, scale_lock=True, **kwargs):
 
@@ -1678,14 +1634,6 @@ class Hugin(object):
         'network': NetworkMonitor,
         'battery': BatteryMonitor
     }
-
-    window = None
-    monitors = None
-    gauges = None
-    _last_right = None
-    _last_top = None
-    _last_bottom = None
-
 
     def __init__(self):
 
@@ -1864,22 +1812,22 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['em0.bytes_recv', 'lo0.bytes_recv'], ['em0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
                 {
-                    #ä'text': '{em0.counters.bytes_recv}/s\n{em0.counters.bytes_sent}/s',
-                    'text': '{em0.all_addrs}',
+                    'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
+                    #'text': '{re0.all_addrs}',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['em0.bytes_sent', 'lo0.bytes_sent'], ['em0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
 
-        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='{aggregate.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL')
+        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL')
 
         self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
         
