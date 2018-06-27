@@ -370,7 +370,8 @@ def render_text(context, text, x, y, align=None, color=None, font_size=None):
     if font_size is None:
         font_size = 12
 
-    font = Pango.FontDescription('Orbitron Light %d' % font_size)
+    
+    font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, font_size))
 
     layout = PangoCairo.create_layout(context)
     layout.set_font_description(font)
@@ -444,6 +445,8 @@ CONFIG_COLORS = {
     'text_minor': Color(1,1,1, 0.3)
 }
 CONFIG_PALETTE = functools.partial(palette_hue, distance=-120) # mhh, curry…
+CONFIG_FONT = 'Orbitron'
+CONFIG_FONT_WEIGHT = 'Light'
 CONFIG_WIDTH = 200
 CONFIG_HEIGHT = 1080 - 32
 
@@ -916,8 +919,8 @@ class Gauge(object):
 
 class MarqueeGauge(Gauge):
 
-    def __init__(self, text, speed=25, **kwargs):
-        
+    def __init__(self, text, speed=25, align=None, **kwargs):
+       
         if 'foreground' not in kwargs:
             kwargs['foreground'] = CONFIG_COLORS['text']
 
@@ -926,7 +929,22 @@ class MarqueeGauge(Gauge):
         self.previous_text = '' # to be able to detect change
 
         self.speed = speed
-        self.font_size = self.inner_height
+
+        if align is None:
+            align = 'left_top'
+        self.align = align
+
+        surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
+        context = cairo.Context(surface)
+        font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, 10))
+        layout = PangoCairo.create_layout(context)
+        layout.set_font_description(font)
+        layout.set_text('0', -1) # naively assuming 0 is the highest glyph
+        size = layout.get_pixel_size()
+        if size[1] > 10:
+            self.font_size = self.inner_height * 10/size[1]
+        else:
+            self.font_size = self.inner_height
         self.direction = 'left'
         self.offset = 0.0
         self.step = speed / CONFIG_FPS # i.e. speed in pixel/s
@@ -937,32 +955,41 @@ class MarqueeGauge(Gauge):
         text = monitor.caption(self.text)
 
         context.save()
-        context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
-        context.clip()
+        #context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
+        #context.clip()
 
         context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-        font = Pango.FontDescription('Orbitron Light %d' % self.font_size)
+        font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, self.font_size))
 
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
         layout.set_text(text, -1)
         
         size = layout.get_pixel_size()
-        max_offset = size[0] - self.inner_width
+        align_offset = alignment_offset(self.align, size) # needed for the specified text alignment
+        max_offset = size[0] - self.inner_width # biggest needed offset for marquee, can be negative if all text fits
 
         if max_offset <= 0 or text != self.previous_text:
             self.direction = 'left'
             self.offset = 0
 
-        #y = self.y + self.padding
-        y = self.y + self.height / 2 - size[1] / 2 # vertically center in case of glitchy huge glyphs
+        x = self.x + self.padding + align_offset[0] - self.offset
+        
+        if self.align.startswith('center'):
+            x += self.inner_width / 2
 
-        context.translate(self.x + self.padding - self.offset, y)
+        elif self.align.startswith('right'):
+            x += self.inner_width
+
+
+        y = self.y + align_offset[1]
+
+        context.translate(x, y)
 
         PangoCairo.update_layout(context, layout)
         PangoCairo.show_layout(context, layout)
 
-        #context.restore()
+        context.restore()
 
         if self.direction == 'left':
             self.offset += self.step
@@ -1213,6 +1240,10 @@ class PlotGauge(Gauge):
 
         self.colors['caption_scale'] = self.colors['foreground'].clone()
         self.colors['caption_scale'].alpha *= 0.6
+
+        self.colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
+        self.colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
+        self.colors_plot_fill = self.palette(self.colors['plot_fill'], len(self.elements))
 
 
     def prepare_points(self):
@@ -1467,9 +1498,9 @@ class PlotGauge(Gauge):
         for idx, element in enumerate(self.elements):
 
             colors = {
-                'plot_marker': colors_plot_marker[idx],
-                'plot_line': colors_plot_line[idx],
-                'plot_fill': colors_plot_fill[idx]
+                'plot_marker': self.colors_plot_marker[idx],
+                'plot_line': self.colors_plot_line[idx],
+                'plot_fill': self.colors_plot_fill[idx]
             }
 
             if self.autoscale:
@@ -1507,6 +1538,11 @@ class MirrorPlotGauge(PlotGauge):
         self.down = self.elements[1]
         self.scale_lock = scale_lock
         self.grid_height /= 2
+
+        palette_len = max((len(self.up), len(self.down)))
+        self.colors_plot_marker = self.palette(self.colors['foreground'], palette_len)
+        self.colors_plot_line = self.palette(self.colors['plot_line'], palette_len)
+        self.colors_plot_fill = self.palette(self.colors['plot_fill'], palette_len)
 
 
     def prepare_points(self):
@@ -1589,17 +1625,14 @@ class MirrorPlotGauge(PlotGauge):
                     render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
             
 
-            colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
-            colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
-            colors_plot_fill = self.palette(self.colors['plot_fill'], len(self.elements))
 
             offset = [0.0 for _ in range(0, self.num_points)]
             for idx, element in enumerate(elements):
 
                 colors = {
-                    'plot_marker': colors_plot_marker[idx],
-                    'plot_line': colors_plot_line[idx],
-                    'plot_fill': colors_plot_fill[idx]
+                    'plot_marker': self.colors_plot_marker[idx],
+                    'plot_line': self.colors_plot_line[idx],
+                    'plot_fill': self.colors_plot_fill[idx]
                 }
 
                 if self.autoscale:
@@ -1811,29 +1844,47 @@ class Hugin(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[['re0.bytes_recv', 'lo0.bytes_recv'], ['re0.bytes_sent', 'lo0.bytes_sent']], combination='cumulative_force', captions=[
+        all_nics = [x for x in psutil.net_if_addrs().keys()]
+        all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
+        all_nics_down = ['%s.bytes_recv' % x for x in all_nics]
+        all_nics_up_packets_ = ['%s.packets_sent' % x for x in all_nics]
+        all_nics_down_packets = ['%s.packets_recv' % x for x in all_nics]
+        all_nics_up_errors = ['%s.errout' % x for x in all_nics]
+        all_nics_down_errors = ['%s.errin' % x for x in all_nics]
+        all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
+        all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
+
+        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
-                    #'text': '{re0.all_addrs}',
+                    #'text': '{em0.all_addrs}',
                     'position': 'center_center',
                     'align': 'center_center',
                 }
             ]
         )
 
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_sent', 'lo0.bytes_sent'])
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['re0.bytes_recv', 'lo0.bytes_recv'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
+        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False)#, combination='cumulative_force')
 
-        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
+        alignments = ['left_center', 'center_center','right_center']
+        palette = self.gauges['network'][-1].colors_plot_marker
+        for idx, if_name in enumerate(all_nics):
+            # build a legend
+            color = palette[idx]
+            align = alignments[idx % 3] # boom.
+            self.autoplace_gauge('network', MarqueeGauge, text=if_name, foreground=color, width=self.window.width/3, height=25, padding=5, align=align)
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
+        #self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
+
+        #self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
         
 
         if psutil.sensors_battery() is not None:
 
-            self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=50, padding=0, captions=[
+            self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
                     {
                         'text': '{percent}%',
                         'position': 'right_center',
