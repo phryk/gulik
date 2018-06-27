@@ -435,7 +435,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 6
+CONFIG_FPS = 3
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -950,22 +950,21 @@ class MarqueeGauge(Gauge):
         size = layout.get_pixel_size()
         max_offset = size[0] - self.inner_width
 
-        if max_offset <= 0:
+        if max_offset <= 0 or text != self.previous_text:
+            self.direction = 'left'
             self.offset = 0
 
-        context.translate(self.x + self.padding - self.offset, self.y + self.padding)
+        #y = self.y + self.padding
+        y = self.y + self.height / 2 - size[1] / 2 # vertically center in case of glitchy huge glyphs
+
+        context.translate(self.x + self.padding - self.offset, y)
 
         PangoCairo.update_layout(context, layout)
         PangoCairo.show_layout(context, layout)
 
-        context.restore()
+        #context.restore()
 
-        if text != self.previous_text:
-            # reset on text change
-            self.direction = 'left'
-            self.offset = 0
-
-        elif self.direction == 'left':
+        if self.direction == 'left':
             self.offset += self.step
             if self.offset > max_offset:
                 self.direction = 'right'
@@ -1827,7 +1826,7 @@ class Hugin(object):
 
         self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['re0.bytes_sent', 'lo0.bytes_sent'], ['re0.bytes_recv', 'lo0.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
 
-        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL')
+        self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
 
         self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45)#, scale_lock=False)#, combination='cumulative_force')
         
