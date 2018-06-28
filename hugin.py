@@ -436,7 +436,7 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 20
+CONFIG_FPS = 3
 CONFIG_COLORS = {
     'window_background': Color(0,0,0, 0.6),
     'gauge_background': Color(1,1,1, 0.1),
@@ -1262,7 +1262,6 @@ class PlotGauge(Gauge):
 
             cumulative_points = []
             for idx in range(0, self.num_points):
-
                 value = 0.0
                 for element in elements:
 
@@ -1271,7 +1270,7 @@ class PlotGauge(Gauge):
                     except IndexError as e:
                         continue # means self.points deques aren't filled completely yet
 
-                    cumulative_points.append(value / len(elements))
+                cumulative_points.append(value / len(elements))
 
             p = max(cumulative_points)
 
@@ -1559,27 +1558,9 @@ class MirrorPlotGauge(PlotGauge):
 
         if self.scale_lock:
 
-            if self.combination == 'cumulative_force':
-
-                cumulative_points = []
-
-                for elements in (self.up, self.down):
-                    for idx in range(0, self.num_points):
-
-                        value = 0.0
-                        for element in elements:
-
-                            try:
-                                value += self.points[element][idx]
-                            except IndexError as e:
-                                continue # means self.points deques aren't filled completely yet
-
-                            cumulative_points.append(value / len(elements))
-
-                p = max(cumulative_points)
-                if p > 0:
-                    return 1.0 / p
-                return 0.0
+            scale_up = super(MirrorPlotGauge, self).get_scale_factor(self.up)
+            scale_down = super(MirrorPlotGauge, self).get_scale_factor(self.down)
+            return min((scale_up, scale_down))
 
         return super(MirrorPlotGauge, self).get_scale_factor(elements)
 
@@ -1602,17 +1583,16 @@ class MirrorPlotGauge(PlotGauge):
             super(MirrorPlotGauge, self).draw_grid(context, monitor, elements=elements)
 
 
-    def draw_plot(self, context, points, colors, offset=None, yeh=True):
+    def draw_plot(self, context, points, colors, offset=None):
 
         points = [x/2 for x in points]
 
         if not offset is None:
             offset =[x/2 for x in offset]
 
-        if yeh:
-            context.translate(0, -self.inner_height / 2)
-            super(MirrorPlotGauge, self).draw_plot(context, points, colors, offset=offset)
-            context.translate(0, self.inner_height / 2)
+        context.translate(0, -self.inner_height / 2)
+        super(MirrorPlotGauge, self).draw_plot(context, points, colors, offset=offset)
+        context.translate(0, self.inner_height / 2)
 
 
     def draw_plot_negative(self, context, points, colors, offset=None):
@@ -1621,7 +1601,7 @@ class MirrorPlotGauge(PlotGauge):
 
         if not offset is None:
             offset = [-x for x in offset]
-        self.draw_plot(context, points, colors, offset=offset, yeh=True)
+        self.draw_plot(context, points, colors, offset=offset)
 
 
     def update(self, context, monitor):
@@ -1895,7 +1875,7 @@ class Hugin(object):
         #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, elements=all_nics_up + ['re0.bytes_sent'], pattern=stripe45, markers=False, combination='cumulative_force')
         self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, elements=['re0.bytes_sent', 're0.bytes_sent'], pattern=stripe45, markers=False, combination='cumulative_force')
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False)#, combination='cumulative_force')#, scale_lock=False)
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=True, combination='cumulative_force')#, scale_lock=False)
 
         alignments = ['left_center', 'center_center','right_center']
         palette = self.gauges['network'][-1].colors_plot_marker
