@@ -200,7 +200,7 @@ class Color(object):
         super(Color, self).__setattr__('blue', blue)
 
 
-class DotDict(collections.UserDict):
+class DotDict(dict):
 
     """
     A dictionary with its data being readable through faked attributes.
@@ -209,9 +209,11 @@ class DotDict(collections.UserDict):
 
     def __getattribute__(self, name):
 
-        data = super(DotDict, self).__getattribute__('data')
-        if name in data:
-            return data[name]
+
+        #data = super(DotDict, self).__getattribute__('data')
+        keys = super(DotDict, self).keys()
+        if name in keys:
+            return self.get(name)
 
         return super(DotDict, self).__getattribute__(name)
 
@@ -544,7 +546,7 @@ class MemoryCollector(Collector):
         #for process in psutil.process_iter(attrs=['name', 'ppid']):
         by_process = collections.OrderedDict()
         #for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'ppid', 'memory_percent', 'memory_info']) if p.info['ppid'] == 1], key=lambda x: x.info['memory_percent'], reverse=True)[:3]): # top 3 memory consuming processes
-        for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'], reverse=True)[:3]): # top 3 memory consuming processes
+        for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'] or 0, reverse=True)[:3]): # top 3 memory consuming processes
             by_process['top_%d' % (i + 1)] = process.info
         
         by_process['other'] = {
@@ -685,6 +687,14 @@ class MemoryMonitor(Monitor):
         data['by_process'] = DotDict()
         for k, v in self.data['by_process'].items():
             data['by_process'][k] = DotDict(v)
+            if k != 'other':
+                meminfo = data['by_process'][k]['memory_info']
+                data['by_process'][k]['memory_info'] = DotDict()
+                for sk, sv in meminfo._asdict().items():
+                    if sk in('rss', 'vms'): # those two fields are guaranteed on every OS by psutil
+                        sv = pretty_bytes(sv)
+
+                    data['by_process'][k]['memory_info'][sk] = sv
 
         return fmt.format(**data)
 
