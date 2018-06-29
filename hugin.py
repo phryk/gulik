@@ -541,10 +541,22 @@ class MemoryCollector(Collector):
 
         virtual_memory = psutil.virtual_memory()
         
-        for process in psutil.process_iter():
-            break
+        #for process in psutil.process_iter(attrs=['name', 'ppid']):
+        by_process = collections.OrderedDict()
+        #for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'ppid', 'memory_percent', 'memory_info']) if p.info['ppid'] == 1], key=lambda x: x.info['memory_percent'], reverse=True)[:3]): # top 3 memory consuming processes
+        for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'], reverse=True)[:3]): # top 3 memory consuming processes
+            by_process['top_%d' % (i + 1)] = process.info
+        
+        by_process['other'] = {
+            'name': 'other',
+            'memory_percent': virtual_memory.percent - sum([x['memory_percent'] for x in by_process.values()])
+        }
+
         self.queue_data.put(
-            virtual_memory,
+            {
+                'virtual_memory': virtual_memory,
+                'by_process': by_process
+            },
             block=True
         )
 
@@ -612,7 +624,7 @@ class Monitor(threading.Thread):
             self.data = data
 
 
-    def normalized(self, element=None):
+    def normalize(self, element=None):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
@@ -624,7 +636,7 @@ class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
 
-    def normalized(self, element=None):
+    def normalize(self, element=None):
 
         if element == 'aggregate':
             return self.data['aggregate'] / 100.0
@@ -649,19 +661,30 @@ class MemoryMonitor(Monitor):
 
     collector_type = MemoryCollector
 
-    def normalized(self, element=None):
-        if len(self.data):
-            return self.data.percent / 100.0
+    def normalize(self, element=None):
+
+        if element == 'vmem':
+
+            if len(self.data['virtual_memory']):
+                return self.data['virtual_memory'].percent / 100.0
+            return 0.0
+
+        return self.data['by_process'][element]['memory_percent'] / 100.0
 
 
     def caption(self, fmt):
 
         data = {}
-        for k, v in self.data._asdict().items():
+        data['vmem'] = DotDict()
+        for k, v in self.data['virtual_memory']._asdict().items():
             if k != 'percent':
                 v = pretty_bytes(v)
 
-            data[k] = v
+            data['vmem'][k] = v
+
+        data['by_process'] = DotDict()
+        for k, v in self.data['by_process'].items():
+            data['by_process'][k] = DotDict(v)
 
         return fmt.format(**data)
 
@@ -752,7 +775,7 @@ class NetworkMonitor(Monitor):
             return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
 
 
-    def normalized(self, element=None):
+    def normalize(self, element=None):
 
         if_name, key = element.split('.')
 
@@ -812,7 +835,7 @@ class BatteryMonitor(Monitor):
 
     collector_type = BatteryCollector
 
-    def normalized(self, element=None):
+    def normalize(self, element=None):
         if len(self.data):
             return self.data.percent / 100.0
 
@@ -956,7 +979,8 @@ class MarqueeGauge(Gauge):
 
         context.save()
         #context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
-        #context.clip()
+        context.rectangle(self.x, self.y, self.width, self.height)
+        context.clip()
 
         context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
         font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, self.font_size))
@@ -1025,7 +1049,7 @@ class RectGauge(Gauge):
 
         for idx, element in enumerate(self.elements):
 
-            value = monitor.normalized(element)
+            value = monitor.normalize(element)
 
             if self.combination != 'cumulative':
                 value /= len(self.elements)
@@ -1082,7 +1106,7 @@ class MirrorRectGauge(Gauge):
 
             for idx, element in enumerate(elements):
                 
-                value = monitor.normalized(element)
+                value = monitor.normalize(element)
 
                 if self.combination != 'cumulative':
                     value /= len(elements)
@@ -1141,7 +1165,7 @@ class ArcGauge(Gauge):
         offset = 0.0
         for idx, element in enumerate(self.elements):
 
-            value = monitor.normalized(element)
+            value = monitor.normalize(element)
 
             if self.combination != 'cumulative':
                 value /= len(self.elements)
@@ -1473,7 +1497,7 @@ class PlotGauge(Gauge):
     def update(self, context, monitor):
         
         for element in set(self.elements): # without set() the same element multiple times leads to multiple same points added every time.
-            self.points[element].append(monitor.normalized(element))
+            self.points[element].append(monitor.normalize(element))
       
         self.draw_background(context)
 
@@ -1613,7 +1637,7 @@ class MirrorPlotGauge(PlotGauge):
         for elements, drawer in ((self.up, self.draw_plot), (self.down, self.draw_plot_negative)):
 
             for element in set(elements):
-                self.points[element].append(monitor.normalized(element))
+                self.points[element].append(monitor.normalize(element))
           
             if self.grid:
                 self.draw_grid(context, monitor, elements)
@@ -1833,15 +1857,23 @@ class Hugin(object):
         #self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
         #self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
 
-        self.autoplace_gauge('memory', ArcGauge, width=self.window.width, height=self.window.width, stroke_width=30, captions=[
+        self.autoplace_gauge(
+            'memory',
+            ArcGauge,
+            elements=['other', 'top_3', 'top_2', 'top_1'],
+            width=self.window.width,
+            height=self.window.width,
+            stroke_width=30,
+            combination='cumulative',
+            captions=[
                 {
-                    'text': '{percent:.1f}%',
+                    'text': '{vmem.percent:.1f}%',
                     'position': 'center_center',
                     'align': 'center_center'
                 },
 
                 {
-                    'text': '{total}',
+                    'text': '{vmem.total}',
                     'position': 'left_top',
                     'align': 'left_top',
                     'color': CONFIG_COLORS['text_minor'],
@@ -1849,6 +1881,13 @@ class Hugin(object):
                 }
             ]
         )
+
+        last_gauge = self.gauges['memory'][-1]
+        palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
+        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_1.name}', width=self.window.width/2, height=25, foreground=palette[0]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_2.name}', width=self.window.width/2, height=25, foreground=palette[1]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_3.name}', width=self.window.width/2, height=25, foreground=palette[2]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.other.name}', width=self.window.width/2, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -1870,14 +1909,9 @@ class Hugin(object):
             ]
         )
 
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_sent', 'lo0.bytes_sent'])
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, pattern=stripe45, elements=['em0.bytes_recv', 'lo0.bytes_recv'])
-        #self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, elements=all_nics_up + ['re0.bytes_sent'], pattern=stripe45, markers=False, combination='cumulative_force')
-        self.autoplace_gauge('network', PlotGauge, width=self.window.width, height=100, padding=15, elements=['re0.bytes_sent', 're0.bytes_sent'], pattern=stripe45, markers=False, combination='cumulative_force')
+        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=True, combination='cumulative_force')#, scale_lock=False)
-
-        alignments = ['left_center', 'center_center','right_center']
+        alignments = ['left_top', 'center_top','right_top']
         palette = self.gauges['network'][-1].colors_plot_marker
         for idx, if_name in enumerate(all_nics):
             # build a legend
