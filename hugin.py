@@ -1,6 +1,7 @@
 #!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
 
+import os
 import math
 import time
 import random
@@ -543,16 +544,23 @@ class MemoryCollector(Collector):
 
         virtual_memory = psutil.virtual_memory()
         
-        #for process in psutil.process_iter(attrs=['name', 'ppid']):
         by_process = collections.OrderedDict()
-        #for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'ppid', 'memory_percent', 'memory_info']) if p.info['ppid'] == 1], key=lambda x: x.info['memory_percent'], reverse=True)[:3]): # top 3 memory consuming processes
         for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'] or 0, reverse=True)[:3]): # top 3 memory consuming processes
             by_process['top_%d' % (i + 1)] = process.info
         
+        mem_used = virtual_memory.total - virtual_memory.available # might not lead to negative results? if so use this one.
+        #mem_used = virtual_memory.used # leads to negative results
+        #mem_used = virtual_memory.total - virtual_memory.inactive - virtual_memory.free # newest approach, which might pad/skew the value a bit
+        mem_top3 = sum([x['memory_info'].rss for x in by_process.values()])
+
         by_process['other'] = {
             'name': 'other',
-            'memory_percent': virtual_memory.percent - sum([x['memory_percent'] for x in by_process.values()])
+            'memory_percent': (mem_used - mem_top3) / virtual_memory.total * 100
         }
+
+        if by_process['other']['memory_percent'] < 0:
+            print("negative memory space", by_process['other']['memory_percent'])
+            by_process['other']['memory_percent'] = 0
 
         self.queue_data.put(
             {
@@ -1803,6 +1811,11 @@ class Hugin(object):
         self._last_right = gauge.x + gauge.width
         self._last_top = gauge.y
         self._last_bottom = gauge.y + gauge.height
+
+
+    def import_config(self):
+
+        path = os.path.expanduser('~/.config/nukular/config.py')
 
 
     def start(self):
