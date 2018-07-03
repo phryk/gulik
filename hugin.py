@@ -19,6 +19,8 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0') # not sure if want
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
+PAGESIZE = os.sysconf('SC_PAGESIZE')
+
 ## Helpers ##
 
 class Color(object):
@@ -542,15 +544,37 @@ class MemoryCollector(Collector):
 
     def update(self):
 
+
+
+
         virtual_memory = psutil.virtual_memory()
-        
+
+        privates = []
+        for process in psutil.process_iter():
+
+            try:
+                private = 0
+                try:
+                    for x in process.memory_maps():
+                        private += x.private
+
+                except Exception as e:
+                    print("Whoops: ", e)
+
+                privates.append(private)
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                print ("FAIL", e)
+
+    #print([pretty_bytes(x*4096) for x in privates])
+
         by_process = collections.OrderedDict()
         for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'] or 0, reverse=True)[:3]): # top 3 memory consuming processes
             by_process['top_%d' % (i + 1)] = process.info
         
-        mem_used = virtual_memory.total - virtual_memory.available # might not lead to negative results? if so use this one.
+        #mem_used = virtual_memory.total - virtual_memory.available # might not lead to negative results? if so use this one.
         #mem_used = virtual_memory.used # leads to negative results
-        #mem_used = virtual_memory.total - virtual_memory.inactive - virtual_memory.free # newest approach, which might pad/skew the value a bit
+        mem_used = virtual_memory.total - virtual_memory.free - virtual_memory.inactive # newest approach, which might pad/skew the value a bit
         mem_top3 = sum([x['memory_info'].rss for x in by_process.values()])
 
         by_process['other'] = {
