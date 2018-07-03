@@ -549,29 +549,64 @@ class MemoryCollector(Collector):
 
         virtual_memory = psutil.virtual_memory()
 
-        privates = []
+#        privates = []
+#        for process in psutil.process_iter():
+#
+#            try:
+#                private = 0
+#                try:
+#                    for x in process.memory_maps(): # needs sysctl security.bsd.unprivileged_proc_debug set on FreeBSD
+#                        private += x.private
+#
+#                except Exception as e:
+#                    print("Whoops: ", e)
+#
+#                privates.append(private)
+#
+#            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+#                print ("FAIL", e)
+#
+#        print([pretty_bytes(x*4096) for x in privates])
+
+        by_process = collections.OrderedDict()
+        processes = []
         for process in psutil.process_iter():
 
             try:
                 private = 0
-                try:
-                    for x in process.memory_maps():
-                        private += x.private
+                shared = 0
+                for mmap in process.memory_maps():
+                    if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
+                        private += mmap.private * PAGESIZE
+                        shared += (mmap.rss - mmap.private) * PAGESIZE
 
-                except Exception as e:
-                    print("Whoops: ", e)
-
-                privates.append(private)
-
+                info = {}
+                info['private'] = private
+                info['shared'] = shared
+                #print(info)
+                
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                print ("FAIL", e)
+                print("memory_maps failed!", e)
 
-    #print([pretty_bytes(x*4096) for x in privates])
 
-        by_process = collections.OrderedDict()
+
         for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'] or 0, reverse=True)[:3]): # top 3 memory consuming processes
-            by_process['top_%d' % (i + 1)] = process.info
-        
+            k = 'top_%d' % (i + 1)
+            by_process[k] = process.info
+            try:
+                private = 0
+                for mmap in process.memory_maps():
+                    #if mmap.path == '[phys]':
+                    if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
+                        private += mmap.private * PAGESIZE
+
+                by_process[k]['private'] = private
+                by_process[k]['memory_percent'] = private / virtual_memory.total * 100 
+
+                
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                print("memory_maps failed!", e)
+        print(sum([x['memory_percent'] for x in by_process.values()]))
         #mem_used = virtual_memory.total - virtual_memory.available # might not lead to negative results? if so use this one.
         #mem_used = virtual_memory.used # leads to negative results
         mem_used = virtual_memory.total - virtual_memory.free - virtual_memory.inactive # newest approach, which might pad/skew the value a bit
