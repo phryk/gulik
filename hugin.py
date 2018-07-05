@@ -544,90 +544,62 @@ class MemoryCollector(Collector):
 
     def update(self):
 
+        vmem = psutil.virtual_memory()
 
-
-
-        virtual_memory = psutil.virtual_memory()
-
-#        privates = []
-#        for process in psutil.process_iter():
-#
-#            try:
-#                private = 0
-#                try:
-#                    for x in process.memory_maps(): # needs sysctl security.bsd.unprivileged_proc_debug set on FreeBSD
-#                        private += x.private
-#
-#                except Exception as e:
-#                    print("Whoops: ", e)
-#
-#                privates.append(private)
-#
-#            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-#                print ("FAIL", e)
-#
-#        print([pretty_bytes(x*4096) for x in privates])
-
-        by_process = collections.OrderedDict()
         processes = []
+        total_use = 0
         for process in psutil.process_iter():
 
             try:
                 private = 0
-                shared = 0
+                #shared = 0
                 for mmap in process.memory_maps():
+                    # FIXME: startswith('[') might make this BSD-specific
                     if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
                         private += mmap.private * PAGESIZE
-                        shared += (mmap.rss - mmap.private) * PAGESIZE
+                        #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
+                        #if mmap.private > mmap.rss:
+                        #    print("This should NEVER happen.")
 
-                info = {}
-                info['private'] = private
-                info['shared'] = shared
-                #print(info)
+                processes.append(DotDict({
+                    'name': process.name(),
+                    'private': private,
+                    'percent': private / vmem.total * 100,
+                    #'shared': shared
+                }))
                 
+                total_use += private
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                print("memory_maps failed!", e)
+                pass#print("memory_maps failed!", e)
 
+        info = DotDict({
+            'total': vmem.total,
+            'percent': total_use / vmem.total * 100,
+            'available': vmem.available
+        })
+        processes_sorted = sorted(processes, key=lambda x: x['private'], reverse=True)
 
+        for i, process in enumerate(processes_sorted[:3]):
+            info['top_%d' % (i + 1)] = process 
 
-        for i, process in enumerate(sorted([p for p in psutil.process_iter(attrs=['name', 'memory_percent', 'memory_info'])], key=lambda x: x.info['memory_percent'] or 0, reverse=True)[:3]): # top 3 memory consuming processes
-            k = 'top_%d' % (i + 1)
-            by_process[k] = process.info
-            try:
-                private = 0
-                for mmap in process.memory_maps():
-                    #if mmap.path == '[phys]':
-                    if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
-                        private += mmap.private * PAGESIZE
+        info['other'] = DotDict({
+            'private': 0,
+            #'shared': 0,
+            'count': 0
+        })
 
-                by_process[k]['private'] = private
-                by_process[k]['memory_percent'] = private / virtual_memory.total * 100 
+        for process in processes_sorted[3:]:
 
-                
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                print("memory_maps failed!", e)
-        print(sum([x['memory_percent'] for x in by_process.values()]))
-        #mem_used = virtual_memory.total - virtual_memory.available # might not lead to negative results? if so use this one.
-        #mem_used = virtual_memory.used # leads to negative results
-        mem_used = virtual_memory.total - virtual_memory.free - virtual_memory.inactive # newest approach, which might pad/skew the value a bit
-        mem_top3 = sum([x['memory_info'].rss for x in by_process.values()])
+            info['other']['private'] += process['private']
+            #info['other']['shared'] += process['shared']
+            info['other']['count'] += 1
 
-        by_process['other'] = {
-            'name': 'other',
-            'memory_percent': (mem_used - mem_top3) / virtual_memory.total * 100
-        }
+        info['other']['percent'] = info['other']['private'] / vmem.total * 100
 
-        if by_process['other']['memory_percent'] < 0:
-            print("negative memory space", by_process['other']['memory_percent'])
-            by_process['other']['memory_percent'] = 0
+        self.queue_data.put(info, block=True)
 
-        self.queue_data.put(
-            {
-                'virtual_memory': virtual_memory,
-                'by_process': by_process
-            },
-            block=True
-        )
+        #time.sleep(1) # because this became horribly slow
 
 
 class NetworkCollector(Collector):
@@ -732,38 +704,16 @@ class MemoryMonitor(Monitor):
 
     def normalize(self, element=None):
 
-        if element == 'vmem':
+        if element == 'percent':
 
-            if len(self.data['virtual_memory']):
-                return self.data['virtual_memory'].percent / 100.0
-            return 0.0
+            return self.data['percent'] / 100.0
 
-        return self.data['by_process'][element]['memory_percent'] / 100.0
+        return self.data[element]['percent'] / 100.0
 
 
     def caption(self, fmt):
 
-        data = {}
-        data['vmem'] = DotDict()
-        for k, v in self.data['virtual_memory']._asdict().items():
-            if k != 'percent':
-                v = pretty_bytes(v)
-
-            data['vmem'][k] = v
-
-        data['by_process'] = DotDict()
-        for k, v in self.data['by_process'].items():
-            data['by_process'][k] = DotDict(v)
-            if k != 'other':
-                meminfo = data['by_process'][k]['memory_info']
-                data['by_process'][k]['memory_info'] = DotDict()
-                for sk, sv in meminfo._asdict().items():
-                    if sk in('rss', 'vms'): # those two fields are guaranteed on every OS by psutil
-                        sv = pretty_bytes(sv)
-
-                    data['by_process'][k]['memory_info'][sk] = sv
-
-        return fmt.format(**data)
+        return fmt.format(**self.data)
 
 
 class NetworkMonitor(Monitor):
@@ -1949,13 +1899,13 @@ class Hugin(object):
             combination='cumulative',
             captions=[
                 {
-                    'text': '{vmem.percent:.1f}%',
+                    'text': '{percent:.1f}%',
                     'position': 'center_center',
                     'align': 'center_center'
                 },
 
                 {
-                    'text': '{vmem.total}',
+                    'text': '{total}',
                     'position': 'left_top',
                     'align': 'left_top',
                     'color': CONFIG_COLORS['text_minor'],
@@ -1966,10 +1916,10 @@ class Hugin(object):
 
         last_gauge = self.gauges['memory'][-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_1.name}', width=self.window.width/2, height=25, foreground=palette[0]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_2.name}', width=self.window.width/2, height=25, foreground=palette[1]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.top_3.name}', width=self.window.width/2, height=25, foreground=palette[2]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{by_process.other.name}', width=self.window.width/2, height=25, foreground=palette[3]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name}', width=self.window.width/2, height=25, foreground=palette[0]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name}', width=self.window.width/2, height=25, foreground=palette[1]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name}', width=self.window.width/2, height=25, foreground=palette[2]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='other({other.count})', width=self.window.width/2, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
