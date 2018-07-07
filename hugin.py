@@ -556,12 +556,15 @@ class MemoryCollector(Collector):
                 resident = 0
                 private = 0
                 #shared = 0
-                for mmap in process.memory_maps():
-                    # FIXME: startswith('[') might make this BSD-specific
-                    if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
-                        private += mmap.private * PAGESIZE
-                        resident += mmap.rss * PAGESIZE
-                        #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
+                try:
+                    for mmap in process.memory_maps():
+                        # FIXME: startswith('[') might make this BSD-specific
+                        if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
+                            private += mmap.private * PAGESIZE
+                            resident += mmap.rss * PAGESIZE
+                            #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
+                except OSError:
+                    pass # probably "device not available"
 
                 processes.append(DotDict({
                     'name': process.name(),
@@ -907,7 +910,7 @@ class BatteryMonitor(Monitor):
 
 class Gauge(object):
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None):
+    def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None, operator=cairo.Operator.OVER):
 
         self.x = x
         self.y = y
@@ -916,6 +919,7 @@ class Gauge(object):
         self.padding = padding
         self.elements = elements if elements is not None else [None]
         self.captions = captions if captions else list()
+        self.operator = operator
 
         self.colors = {}
 
@@ -967,8 +971,10 @@ class Gauge(object):
 
         for caption in self.captions:
 
-            context.save()
-            context.set_operator(cairo.Operator.DEST_OUT)
+            if 'operator' in caption:
+                context.save()
+                context.set_operator(caption['operator'])
+
             if 'position' in caption:
 
                 if isinstance(caption['position'], str):
@@ -987,8 +993,8 @@ class Gauge(object):
 
             render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
-            context.set_operator(cairo.Operator.OVER)
-            context.restore()
+            if 'operator' in caption:
+                context.restore()
 
     def update(self, context, monitor):
 
@@ -998,7 +1004,15 @@ class Gauge(object):
             monitor: A Monitor object holding relevant data and helper functions
         """
 
-        raise NotImplementedError("%s.update not implemented!" % self.__class__.__name__)
+        context.save()
+        context.set_operator(self.operator)
+        self.draw(context, monitor)
+        context.restore()
+
+
+    def draw(self, context, monitor):
+
+        raise NotImplementedError("%s.draw not implemented!" % self.__class__.__name__)
 
 
 class MarqueeGauge(Gauge):
@@ -1034,7 +1048,7 @@ class MarqueeGauge(Gauge):
         self.step = speed / CONFIG_FPS # i.e. speed in pixel/s
 
 
-    def update(self, context, monitor):
+    def draw(self, context, monitor):
         
         text = monitor.caption(self.text)
 
@@ -1101,7 +1115,7 @@ class RectGauge(Gauge):
             context.fill()
 
 
-    def update(self, context, monitor):
+    def draw(self, context, monitor):
         
         colors = self.palette(self.colors['foreground'], len(self.elements))
         offset = 0.0
@@ -1155,7 +1169,7 @@ class MirrorRectGauge(Gauge):
             context.fill()
 
 
-    def update(self, context, monitor):
+    def draw(self, context, monitor):
 
         colors = self.palette(self.colors['foreground'], max(len(self.left), len(self.right)))
 
@@ -1218,7 +1232,7 @@ class ArcGauge(Gauge):
         self.draw_arc(context, 1, self.colors['background'])
 
 
-    def update(self, context, monitor):
+    def draw(self, context, monitor):
 
         self.draw_background(context)
 
@@ -1559,7 +1573,12 @@ class PlotGauge(Gauge):
         
         for element in set(self.elements): # without set() the same element multiple times leads to multiple same points added every time.
             self.points[element].append(monitor.normalize(element))
-      
+
+        super(PlotGauge, self).update(context, monitor)
+
+
+    def draw(self, context, monitor):
+
         self.draw_background(context)
 
         if self.grid:
@@ -1691,7 +1710,16 @@ class MirrorPlotGauge(PlotGauge):
 
     def update(self, context, monitor):
 
-        # TODO: This is mostly a copy-paste of PlotGauge.update, needs moar DRY.
+        for element in set(self.up + self.down):
+
+            self.points[element].append(monitor.normalize(element))
+
+        super(PlotGauge, self).update(context, monitor) # TRAP: calls parent of parent, not direct parent!
+
+
+    def draw(self, context, monitor):
+
+        # TODO: This is mostly a copy-paste of PlotGauge.update+draw, needs moar DRY.
 
         self.draw_background(context)
 
@@ -1950,10 +1978,10 @@ class Hugin(object):
 
         last_gauge = self.gauges['memory'][-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name}, {top_1.private}', width=self.window.width/2, height=25, foreground=palette[0]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name}', width=self.window.width/2, height=25, foreground=palette[1]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name}', width=self.window.width/2, height=25, foreground=palette[2]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='other({other.count})', width=self.window.width/2, height=25, foreground=palette[3]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=self.window.width, height=25, foreground=palette[0]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[1]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[2]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=self.window.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -1994,15 +2022,17 @@ class Hugin(object):
 
             self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
                     {
-                        'text': '{percent}%',
-                        'position': 'right_top',
-                        'align': 'right_top',
+                        'text': '{state}…',
+                        'position': 'left_center',
+                        'align': 'left_center',
+                        'operator': cairo.Operator.OVERLAY,
                     },
                     {
-                        'text': '{state}…',
-                        'position': 'right_bottom',
-                        'align': 'right_bottom',
-                    }
+                        'text': '{percent}%',
+                        'position': 'right_center',
+                        'align': 'right_center',
+                        'operator': cairo.Operator.OVERLAY,
+                    },
                 ]
             )
 
