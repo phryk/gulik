@@ -481,6 +481,8 @@ class Window(Gtk.Window):
 
 
     @property
+
+
     def width(self):
 
         return self.get_size()[0]
@@ -551,24 +553,26 @@ class MemoryCollector(Collector):
         for process in psutil.process_iter():
 
             try:
+                resident = 0
                 private = 0
                 #shared = 0
                 for mmap in process.memory_maps():
                     # FIXME: startswith('[') might make this BSD-specific
                     if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
                         private += mmap.private * PAGESIZE
+                        resident += mmap.rss * PAGESIZE
                         #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
-                        #if mmap.private > mmap.rss:
-                        #    print("This should NEVER happen.")
 
                 processes.append(DotDict({
                     'name': process.name(),
                     'private': private,
+                    'shared': resident - private,
                     'percent': private / vmem.total * 100,
-                    #'shared': shared
                 }))
                 
                 total_use += private
+
+
 
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
                 pass#print("memory_maps failed!", e)
@@ -576,8 +580,9 @@ class MemoryCollector(Collector):
         info = DotDict({
             'total': vmem.total,
             'percent': total_use / vmem.total * 100,
-            'available': vmem.available
+            'available': vmem.total - total_use
         })
+        print(info['percent'])
         processes_sorted = sorted(processes, key=lambda x: x['private'], reverse=True)
 
         for i, process in enumerate(processes_sorted[:3]):
@@ -585,14 +590,14 @@ class MemoryCollector(Collector):
 
         info['other'] = DotDict({
             'private': 0,
-            #'shared': 0,
+            'shared': 0,
             'count': 0
         })
 
         for process in processes_sorted[3:]:
 
             info['other']['private'] += process['private']
-            #info['other']['shared'] += process['shared']
+            info['other']['shared'] += process['shared']
             info['other']['count'] += 1
 
         info['other']['percent'] = info['other']['private'] / vmem.total * 100
@@ -713,7 +718,24 @@ class MemoryMonitor(Monitor):
 
     def caption(self, fmt):
 
-        return fmt.format(**self.data)
+        #print(fmt)
+        #print(self.data)
+
+        data = DotDict()#dict(self.data) # clone
+
+        data['total'] = pretty_bytes(self.data['total'])
+        data['available'] = pretty_bytes(self.data['available'])
+        data['percent'] = self.data['percent']
+        
+        for k in ['top_1', 'top_2', 'top_3', 'other']:
+            data[k] = DotDict()
+            if k != 'other':
+                data[k]['name'] = self.data[k]['name']
+            else:
+                data[k]['count'] = self.data[k]['count']
+            data[k]['private'] = pretty_bytes(self.data[k]['private'])
+            data[k]['shared'] = pretty_bytes(self.data[k]['shared'])
+        return fmt.format(**data)
 
 
 class NetworkMonitor(Monitor):
@@ -869,7 +891,16 @@ class BatteryMonitor(Monitor):
 
     def caption(self, fmt):
 
-        return fmt.format(**self.data._asdict())
+        data = self.data._asdict()
+
+        if not data['power_plugged']:
+            data['state'] = 'Draining'
+        elif data['percent'] == 100:
+            data['state'] = 'Full'
+        else:
+            data['state'] = 'Charging'
+
+        return fmt.format(**data)
 
 
 ## Gauges ##
@@ -936,6 +967,8 @@ class Gauge(object):
 
         for caption in self.captions:
 
+            context.save()
+            context.set_operator(cairo.Operator.DEST_OUT)
             if 'position' in caption:
 
                 if isinstance(caption['position'], str):
@@ -950,11 +983,12 @@ class Gauge(object):
 
             position = [position[0] + self.x + self.padding, position[1] + self.y + self.padding]
 
-
             caption_text = monitor.caption(caption['text'])
 
             render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
+            context.set_operator(cairo.Operator.OVER)
+            context.restore()
 
     def update(self, context, monitor):
 
@@ -1916,7 +1950,7 @@ class Hugin(object):
 
         last_gauge = self.gauges['memory'][-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name}', width=self.window.width/2, height=25, foreground=palette[0]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name}, {top_1.private}', width=self.window.width/2, height=25, foreground=palette[0]) 
         self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name}', width=self.window.width/2, height=25, foreground=palette[1]) 
         self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name}', width=self.window.width/2, height=25, foreground=palette[2]) 
         self.autoplace_gauge('memory', MarqueeGauge, text='other({other.count})', width=self.window.width/2, height=25, foreground=palette[3]) 
@@ -1961,17 +1995,27 @@ class Hugin(object):
             self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
                     {
                         'text': '{percent}%',
-                        'position': 'right_center',
-                        'align': 'right_center',
+                        'position': 'right_top',
+                        'align': 'right_top',
+                    },
+                    {
+                        'text': '{state}…',
+                        'position': 'right_bottom',
+                        'align': 'right_bottom',
                     }
                 ]
             )
 
-## The actual setup ##
+def main():
+    ## The actual setup ##
 
-hugin = Hugin()
-hugin.autosetup()
-# TODO: This should move into a separate file together with theme
+    hugin = Hugin()
+    hugin.autosetup()
+    # TODO: This should move into a separate file together with theme
 
 
-hugin.start()
+    hugin.start()
+
+
+if __name__ == '__main__':
+    main()
