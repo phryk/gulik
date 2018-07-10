@@ -462,8 +462,8 @@ class Window(Gtk.Window):
 
         super(Window, self).__init__()
 
-        self.set_title('hugin')
-        self.set_role('hugin')
+        self.set_title('nukular')
+        self.set_role('nukular')
         self.resize(CONFIG_WIDTH, CONFIG_HEIGHT)
         self.stick() # show this window on every virtual desktop
 
@@ -585,7 +585,7 @@ class MemoryCollector(Collector):
             'percent': total_use / vmem.total * 100,
             'available': vmem.total - total_use
         })
-        print(info['percent'])
+
         processes_sorted = sorted(processes, key=lambda x: x['private'], reverse=True)
 
         for i, process in enumerate(processes_sorted[:3]):
@@ -1777,7 +1777,7 @@ class MirrorPlotGauge(PlotGauge):
         self.draw_captions(context, monitor)
     
 
-class Hugin(object):
+class Nukular(object):
 
     monitor_table = {
         'cpu': CPUMonitor,
@@ -1871,7 +1871,7 @@ class Hugin(object):
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
                 self.monitors[component] = self.monitor_table[component]()
             else:
-                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Hugin.monitor_table to enable autoloading." % component)
+                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Nukular.monitor_table to enable autoloading." % component)
 
         if not component in self.gauges:
             self.gauges[component] = []
@@ -1897,7 +1897,7 @@ class Hugin(object):
         for monitor in self.monitors.values():
             monitor.start()
 
-        signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills hugin
+        signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills nukular
         GLib.timeout_add(1000/CONFIG_FPS, self.tick)
         self.tick()
         Gtk.main()
@@ -1980,7 +1980,7 @@ class Hugin(object):
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
         self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=self.window.width, height=25, foreground=palette[0]) 
         self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[1]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[2]) 
+        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=self.window.width, height=25, foreground=palette[2]) 
         self.autoplace_gauge('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=self.window.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
@@ -2036,16 +2036,13 @@ class Hugin(object):
                 ]
             )
 
+
 def main():
     ## The actual setup ##
 
-    hugin = Hugin()
-    hugin.autosetup()
+    nukular = Nukular()
+    nukular.autosetup()
     # TODO: This should move into a separate file together with theme
 
 
-    hugin.start()
-
-
-if __name__ == '__main__':
-    main()
+    nukular.start()
