@@ -1,7 +1,19 @@
 #!/usr/bin/env python3.6
 
+import os.path
 import nukular
+
+def main():
+
+    app = nukular.Nukular()
+
+    config_path = os.path.expanduser('~/.config/nukular/config.py') # TODO: allow path to be passed as arg
+    app.apply_config(config_path)
+
+    app.setup()
+
+    app.start()
 
 
 if __name__ == '__main__':
-    nukular.main()
+    main()

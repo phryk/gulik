@@ -362,38 +362,6 @@ def alignment_offset(align, size):
     return (x_offset, y_offset)
 
 
-def render_text(context, text, x, y, align=None, color=None, font_size=None):
-    
-    if align is None:
-        align = 'left_top'
-    
-    if color is None:
-        color = CONFIG_COLORS['text']
-    
-    context.set_source_rgba(*color.tuple_rgba())
-
-    if font_size is None:
-        font_size = 12
-
-    
-    font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, font_size))
-
-    layout = PangoCairo.create_layout(context)
-    layout.set_font_description(font)
-    layout.set_text(text, -1)
-    
-    size = layout.get_pixel_size()
-
-    x_offset, y_offset = alignment_offset(align, size)
-    
-    context.translate(x + x_offset, y + y_offset)
-
-    PangoCairo.update_layout(context, layout)
-    PangoCairo.show_layout(context, layout)
-
-    context.translate(-x - x_offset, -y - y_offset)
-
-    return size
 
 
 ## FILLS ##
@@ -441,19 +409,25 @@ def stripe45(color):
 
 
 # CONFIG: TODO: Move into its own file, obvsly
-CONFIG_FPS = 3
-CONFIG_COLORS = {
-    'window_background': Color(0,0,0, 0.6),
-    'gauge_background': Color(1,1,1, 0.1),
-    'highlight': Color(0.5, 1, 0, 0.6),
-    'text': Color(1,1,1, 0.6),
-    'text_minor': Color(1,1,1, 0.3)
+
+DEFAULTS = {
+    'FPS': 1,
+    'COLORS': {
+        'window_background': Color(0,0,0, 0.6),
+        'gauge_background': Color(1,1,1, 0.1),
+        'highlight': Color(0.5, 1, 0, 0.6),
+        'text': Color(1,1,1, 0.6),
+        'text_minor': Color(1,1,1, 0.3)
+    },
+    'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
+    'FONT': 'Orbitron',
+    'FONT_WEIGHT': 'Light',
+    'WIDTH': 200,
+    'HEIGHT': Gdk.Screen().get_default().get_height(),
+    'X': 0,
+    'Y': 0
 }
-CONFIG_PALETTE = functools.partial(palette_hue, distance=-120) # mhh, curry…
-CONFIG_FONT = 'Orbitron'
-CONFIG_FONT_WEIGHT = 'Light'
-CONFIG_WIDTH = 200
-CONFIG_HEIGHT = 1080 - 32
+
 
 ## Stuff I'd much rather do without a huge dependency like gtk ##
 class Window(Gtk.Window):
@@ -464,7 +438,6 @@ class Window(Gtk.Window):
 
         self.set_title('nukular')
         self.set_role('nukular')
-        self.resize(CONFIG_WIDTH, CONFIG_HEIGHT)
         self.stick() # show this window on every virtual desktop
 
         self.set_app_paintable(True)
@@ -477,7 +450,6 @@ class Window(Gtk.Window):
             self.set_visual(visual)
 
         self.show_all()
-        self.move(0, 32) # move apparently must be called after show_all
 
 
     @property
@@ -643,9 +615,10 @@ class Monitor(threading.Thread):
 
     collector_type = Collector
 
-    def __init__(self):
+    def __init__(self, app):
 
         super(Monitor, self).__init__()
+        self.app = app
         self.daemon = True
 
         self.queue_update = multiprocessing.Queue(1)
@@ -745,16 +718,16 @@ class NetworkMonitor(Monitor):
 
     collector_type = NetworkCollector
 
-    def __init__(self):
+    def __init__(self, app):
 
-        super(NetworkMonitor, self).__init__()
+        super(NetworkMonitor, self).__init__(app)
 
         self.interfaces = collections.OrderedDict()
 
-        if CONFIG_FPS < 2:
+        if self.app.config['FPS'] < 2:
             deque_len = 2 # we need a minimum of 2 so we can get a difference
         else:
-            deque_len = CONFIG_FPS # max size equal fps means this holds data of only the last second
+            deque_len = self.app.config['FPS'] # max size equal fps means this holds data of only the last second
 
         keys = ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']
 
@@ -820,8 +793,8 @@ class NetworkMonitor(Monitor):
         else:
             deque = self.interfaces[interface]['counters'][key]
         
-        if CONFIG_FPS < 2:
-            return (deque[-1] - deque[0]) / CONFIG_FPS # fps < 1 means data covers 1/fps seconds
+        if self.app.config['FPS'] < 2:
+            return (deque[-1] - deque[0]) / self.app.config['FPS'] # fps < 1 means data covers 1/fps seconds
 
         else:
             return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
@@ -910,8 +883,9 @@ class BatteryMonitor(Monitor):
 
 class Gauge(object):
 
-    def __init__(self, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None, operator=cairo.Operator.OVER):
+    def __init__(self, app, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None, operator=cairo.Operator.OVER):
 
+        self.app = app
         self.x = x
         self.y = y
         self.width = width
@@ -924,17 +898,17 @@ class Gauge(object):
         self.colors = {}
 
         if foreground is None:
-            self.colors['foreground'] = CONFIG_COLORS['highlight']
+            self.colors['foreground'] = self.app.config['COLORS']['highlight']
         else:
             self.colors['foreground'] = foreground
 
         if background is None:
-            self.colors['background'] = CONFIG_COLORS['gauge_background']
+            self.colors['background'] = self.app.config['COLORS']['gauge_background']
         else:
             self.colors['background'] = background
 
         self.pattern = pattern
-        self.palette = palette or CONFIG_PALETTE # function to generate color palettes with
+        self.palette = palette or self.app.config['PALETTE'] # function to generate color palettes with
 
         self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
@@ -991,7 +965,7 @@ class Gauge(object):
 
             caption_text = monitor.caption(caption['text'])
 
-            render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
+            self.app.render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
             if 'operator' in caption:
                 context.restore()
@@ -1017,12 +991,12 @@ class Gauge(object):
 
 class MarqueeGauge(Gauge):
 
-    def __init__(self, text, speed=25, align=None, **kwargs):
+    def __init__(self, app, text, speed=25, align=None, **kwargs):
        
         if 'foreground' not in kwargs:
-            kwargs['foreground'] = CONFIG_COLORS['text']
+            kwargs['foreground'] = self.app.config['COLORS']['text']
 
-        super(MarqueeGauge, self).__init__(**kwargs)
+        super(MarqueeGauge, self).__init__(app, **kwargs)
         self.text = text # the text to be rendered, a format string passed to monitor.caption
         self.previous_text = '' # to be able to detect change
 
@@ -1034,7 +1008,7 @@ class MarqueeGauge(Gauge):
 
         surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
         context = cairo.Context(surface)
-        font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, 10))
+        font = Pango.FontDescription('%s %s %d' % (self.app.config['FONT'], self.app.config['FONT_WEIGHT'], 10))
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
         layout.set_text('0', -1) # naively assuming 0 is the highest glyph
@@ -1045,7 +1019,7 @@ class MarqueeGauge(Gauge):
             self.font_size = self.inner_height
         self.direction = 'left'
         self.offset = 0.0
-        self.step = speed / CONFIG_FPS # i.e. speed in pixel/s
+        self.step = speed / self.app.config['FPS'] # i.e. speed in pixel/s
 
 
     def draw(self, context, monitor):
@@ -1058,7 +1032,7 @@ class MarqueeGauge(Gauge):
         context.clip()
 
         context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-        font = Pango.FontDescription('%s %s %d' % (CONFIG_FONT, CONFIG_FONT_WEIGHT, self.font_size))
+        font = Pango.FontDescription('%s %s %d' % (self.app.config['FONT'], self.app.config['FONT_WEIGHT'], self.font_size))
 
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
@@ -1143,9 +1117,9 @@ class RectGauge(Gauge):
 
 class MirrorRectGauge(Gauge):
 
-    def __init__(self, **kwargs):
+    def __init__(self, app, **kwargs):
 
-        super(MirrorRectGauge, self).__init__(**kwargs)
+        super(MirrorRectGauge, self).__init__(app, **kwargs)
         self.x_center = self.x + self.width / 2
         self.left = self.elements[0]
         self.right = self.elements[1]
@@ -1200,9 +1174,9 @@ class MirrorRectGauge(Gauge):
 
 class ArcGauge(Gauge):
 
-    def __init__(self, stroke_width=5, **kwargs):
+    def __init__(self, app, stroke_width=5, **kwargs):
 
-        super(ArcGauge, self).__init__(**kwargs)
+        super(ArcGauge, self).__init__(app, **kwargs)
         self.stroke_width = stroke_width
         self.radius = (min(self.width, self.height) / 2) - (2 * self.padding) - (self.stroke_width / 2)
         self.x_center = self.x + self.width / 2
@@ -1259,9 +1233,9 @@ class ArcGauge(Gauge):
 
 class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
-    def __init__(self, **kwargs):
+    def __init__(self, app, **kwargs):
 
-        super(MirrorArcGauge, self).__init__(**kwargs)
+        super(MirrorArcGauge, self).__init__(app, **kwargs)
         self.left = self.elements[0]
         self.right = self.elements[1]
         self.draw_left = self.draw_arc_negative
@@ -1300,9 +1274,9 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
 class PlotGauge(Gauge):
 
-    def __init__(self, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
+    def __init__(self, app, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
-        super(PlotGauge, self).__init__(**kwargs)
+        super(PlotGauge, self).__init__(app, **kwargs)
 
         if num_points:
             self.num_points = num_points
@@ -1590,7 +1564,7 @@ class PlotGauge(Gauge):
                 text = u"∞X"
             else:
                 text = "%sX" % pretty_si(self.get_scale_factor())
-            render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
+            self.app.render_text(context, text, self.x + self.padding + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
         
 
         colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
@@ -1633,9 +1607,9 @@ class MirrorPlotGauge(PlotGauge):
 
     #scale_lock = None # bool, whether to use the same scale for up and down
 
-    def __init__(self, scale_lock=True, **kwargs):
+    def __init__(self, app, scale_lock=True, **kwargs):
 
-        super(MirrorPlotGauge, self).__init__(**kwargs)
+        super(MirrorPlotGauge, self).__init__(app, **kwargs)
         self.y_center = self.y + self.height / 2
         self.up = self.elements[0]
         self.down = self.elements[1]
@@ -1739,9 +1713,9 @@ class MirrorPlotGauge(PlotGauge):
                     text = "%sX" % pretty_si(self.get_scale_factor(elements))
 
                 if elements == self.up:
-                    render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
+                    self.app.render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
                 elif not self.scale_lock: # don't show 'down' scalefactor if it's locked
-                    render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
+                    self.app.render_text(context, text, self.x + self.padding + self.inner_width, self.y + self.padding + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
             
 
 
@@ -1786,8 +1760,10 @@ class Nukular(object):
         'battery': BatteryMonitor
     }
 
+
     def __init__(self):
 
+        self.screen = Gdk.Screen.get_default()
         self.window = Window()
         self.window.connect('draw', self.draw)
         
@@ -1802,6 +1778,36 @@ class Nukular(object):
         self._last_top = 0
         self._last_bottom = 0 
 
+        self.setup = self.autosetup
+        self.config = {}
+
+
+    def apply_config(self, path):
+
+        config_dict = {}
+        try:
+            fd = open(path, mode='r')
+            config_string = fd.read()
+        except OSError as e:
+            print("No config at '%s' or insufficient permissions to read it. Falling back to defaults…" % path)
+
+        else:
+            try:
+                exec(config_string, config_dict)
+            except Exception as e:
+                print("Error in '%s': %s" % (path, e))
+                print("Falling back to defaults…")
+                config_dict = DEFAULTS # because config_dict might be contaminated by half-done exec
+
+        for key in DEFAULTS:
+            self.config[key] = config_dict.get(key, DEFAULTS[key])
+
+        self.window.resize(self.config['WIDTH'], self.config['HEIGHT'])
+        self.window.move(self.config['X'], self.config['Y']) # move apparently must be called after show_all
+
+        if 'setup' in config_dict:
+            self.setup = functools.partial(config_dict['setup'], app=self)
+
 
     def tick(self):
 
@@ -1811,13 +1817,46 @@ class Nukular(object):
         return True # gtk stops executing timeout callbacks if they don't return True
 
 
+    def render_text(self, context, text, x, y, align=None, color=None, font_size=None):
+        
+        if align is None:
+            align = 'left_top'
+        
+        if color is None:
+            color = self.config['COLORS']['text']
+        
+        context.set_source_rgba(*color.tuple_rgba())
+
+        if font_size is None:
+            font_size = 12
+
+        
+        font = Pango.FontDescription('%s %s %d' % (self.config['FONT'], self.config['FONT_WEIGHT'], font_size))
+
+        layout = PangoCairo.create_layout(context)
+        layout.set_font_description(font)
+        layout.set_text(text, -1)
+        
+        size = layout.get_pixel_size()
+
+        x_offset, y_offset = alignment_offset(align, size)
+        
+        context.translate(x + x_offset, y + y_offset)
+
+        PangoCairo.update_layout(context, layout)
+        PangoCairo.show_layout(context, layout)
+
+        context.translate(-x - x_offset, -y - y_offset)
+
+        return size
+
     def draw(self, window, context):
 
         context.set_operator(cairo.OPERATOR_CLEAR)
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
 
-        context.set_source_rgba(*CONFIG_COLORS['window_background'].tuple_rgba())
+        context.set_source_rgba(*self.config['COLORS']['window_background'].tuple_rgba())
         context.rectangle(0, 0, self.window.width, self.window.height)
         context.fill()
 
@@ -1869,14 +1908,14 @@ class Nukular(object):
         if not component in self.monitors:
             if component in self.monitor_table:
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
-                self.monitors[component] = self.monitor_table[component]()
+                self.monitors[component] = self.monitor_table[component](self)
             else:
                 raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Nukular.monitor_table to enable autoloading." % component)
 
         if not component in self.gauges:
             self.gauges[component] = []
             
-        gauge = cls(**kwargs)
+        gauge = cls(self, **kwargs)
         self.gauges[component].append(gauge)
 
         self._last_right = gauge.x + gauge.width
@@ -1884,21 +1923,16 @@ class Nukular(object):
         self._last_bottom = gauge.y + gauge.height
 
 
-    def import_config(self):
-
-        path = os.path.expanduser('~/.config/nukular/config.py')
-
-
     def start(self):
 
-        assert CONFIG_FPS != 0
-        assert isinstance(CONFIG_FPS, float) or CONFIG_FPS >= 1
+        assert self.config['FPS'] != 0
+        assert isinstance(self.config['FPS'], float) or self.config['FPS'] >= 1
 
         for monitor in self.monitors.values():
             monitor.start()
 
         signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills nukular
-        GLib.timeout_add(1000/CONFIG_FPS, self.tick)
+        GLib.timeout_add(1000/self.config['FPS'], self.tick)
         self.tick()
         Gtk.main()
         print("\nThank you for flying with phryk evil mad sciences, LLC. Please come again.")
@@ -1937,7 +1971,7 @@ class Nukular(object):
                     'text': '{count} cores',
                     'position': 'right_bottom',
                     'align': 'right_bottom',
-                    'color': CONFIG_COLORS['text_minor'],
+                    'color': self.config['COLORS']['text_minor'],
                     'font_size': 8
                 }
             ]
@@ -1970,7 +2004,7 @@ class Nukular(object):
                     'text': '{total}',
                     'position': 'left_top',
                     'align': 'left_top',
-                    'color': CONFIG_COLORS['text_minor'],
+                    'color': self.config['COLORS']['text_minor'],
                     'font_size': 8,
                 }
             ]
@@ -2035,14 +2069,3 @@ class Nukular(object):
                     },
                 ]
             )
-
-
-def main():
-    ## The actual setup ##
-
-    nukular = Nukular()
-    nukular.autosetup()
-    # TODO: This should move into a separate file together with theme
-
-
-    nukular.start()
