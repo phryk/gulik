@@ -3,7 +3,7 @@
 from distutils.core import setup
 
 setup(  name='nukular',
-        description='An advanced graphical system monitoring suite using cairo.',
+        description='advanced graphical system monitoring suite using cairo and psutil.',
         author='phryk',
         classifiers=[
             'Development Status :: 2 - Pre-Alpha',
@@ -14,5 +14,6 @@ setup(  name='nukular',
             'pycairo',
             'PyGObject'
         ],
-        scripts=['nukular']
+        packages=['nukular'],
+        scripts=['bin/nukular']
     )
