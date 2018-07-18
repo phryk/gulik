@@ -1,13 +1,13 @@
 #!/usr/bin/env python3.6
 
 import os.path
-import nukular
+import gulik
 
 def main():
 
-    app = nukular.Nukular()
+    app = gulik.Gulik()
 
-    config_path = os.path.expanduser('~/.config/nukular/config.py') # TODO: allow path to be passed as arg
+    config_path = os.path.expanduser('~/.config/gulik/config.py') # TODO: allow path to be passed as arg
     app.apply_config(config_path)
 
     app.setup()

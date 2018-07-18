@@ -2,7 +2,7 @@
 
 from distutils.core import setup
 
-setup(  name='nukular',
+setup(  name='gulik',
         description='advanced graphical system monitoring suite using cairo and psutil.',
         author='phryk',
         classifiers=[
@@ -14,6 +14,6 @@ setup(  name='nukular',
             'pycairo',
             'PyGObject'
         ],
-        packages=['nukular'],
-        scripts=['bin/nukular']
+        packages=['gulik'],
+        scripts=['bin/gulik']
     )

@@ -436,8 +436,8 @@ class Window(Gtk.Window):
 
         super(Window, self).__init__()
 
-        self.set_title('nukular')
-        self.set_role('nukular')
+        self.set_title('gulik')
+        self.set_role('gulik')
         self.stick() # show this window on every virtual desktop
 
         self.set_app_paintable(True)
@@ -1751,7 +1751,7 @@ class MirrorPlotGauge(PlotGauge):
         self.draw_captions(context, monitor)
     
 
-class Nukular(object):
+class Gulik(object):
 
     monitor_table = {
         'cpu': CPUMonitor,
@@ -1910,7 +1910,7 @@ class Nukular(object):
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
                 self.monitors[component] = self.monitor_table[component](self)
             else:
-                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Nukular.monitor_table to enable autoloading." % component)
+                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Gulik.monitor_table to enable autoloading." % component)
 
         if not component in self.gauges:
             self.gauges[component] = []
@@ -1931,7 +1931,7 @@ class Nukular(object):
         for monitor in self.monitors.values():
             monitor.start()
 
-        signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills nukular
+        signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills gulik
         GLib.timeout_add(1000/self.config['FPS'], self.tick)
         self.tick()
         Gtk.main()
