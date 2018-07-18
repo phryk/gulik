@@ -1857,7 +1857,7 @@ class Gulik(object):
         # he is 200 by 133 poxels big
         gulik = cairo.ImageSurface.create_from_png(os.path.join(__path__[0], 'gulik.png'))
         context.save()
-        context.set_operator(cairo.OPERATOR_OVERLAY)
+        context.set_operator(cairo.OPERATOR_SOFT_LIGHT)
         context.translate(0, self.window.height - 133)
         context.set_source_surface(gulik)
         context.rectangle(0, 0, 200, 133)
