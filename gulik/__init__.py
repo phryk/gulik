@@ -1850,6 +1850,21 @@ class Gulik(object):
 
         return size
 
+    
+    def draw_gulik(self, context):
+
+        # gulik is the messenger of our lady discordia.
+        # he is 200 by 133 poxels big
+        gulik = cairo.ImageSurface.create_from_png(os.path.join(__path__[0], 'gulik.png'))
+        context.save()
+        context.set_operator(cairo.OPERATOR_OVERLAY)
+        context.translate(0, self.window.height - 133)
+        context.set_source_surface(gulik)
+        context.rectangle(0, 0, 200, 133)
+        context.fill()
+        context.restore()
+
+
     def draw(self, window, context):
 
         context.set_operator(cairo.OPERATOR_CLEAR)
@@ -1859,6 +1874,8 @@ class Gulik(object):
         context.set_source_rgba(*self.config['COLORS']['window_background'].tuple_rgba())
         context.rectangle(0, 0, self.window.width, self.window.height)
         context.fill()
+
+        self.draw_gulik(context)
 
         for source, monitor in self.monitors.items():
 

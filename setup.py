@@ -14,6 +14,7 @@ setup(  name='gulik',
             'pycairo',
             'PyGObject'
         ],
+        scripts=['bin/gulik'],
         packages=['gulik'],
-        scripts=['bin/gulik']
+        package_data={'gulik': ['gulik.png']}
     )
