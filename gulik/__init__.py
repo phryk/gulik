@@ -775,7 +775,11 @@ class NetworkMonitor(Monitor):
                     self.interfaces[if_name]['stats']['speed'] = 1000 # assume gbit speed per default
 
                 self.aggregate['speed'] += self.interfaces[if_name]['stats']['speed']
-                self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
+                
+                if if_name in self.data['addrs']:
+                    self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
+                else:
+                    self.interfaces[if_name]['addrs'] = []
 
             for key, value in aggregates.items():
                 self.aggregate['counters'][key].append(value)
