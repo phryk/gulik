@@ -961,6 +961,13 @@ class NetdataMonitor(Monitor):
     def __repr__(self):
 
         return f"<{self.__class__.__name__} host={self.collector.client.host} port={self.collector.client.port}>"
+    
+    def register_elements(self, elements):
+
+        for element in elements:
+            parts = element.split('.')
+            chart = '.'.join(parts[:2])
+            self.charts.add(chart)
 
     
     def run(self):
@@ -991,7 +998,7 @@ class NetdataMonitor(Monitor):
 
         subidx = self.data[chart]['labels'].index(subelem)
 
-        print(subelem, subidx, self.data[chart])
+        #print(subelem, subidx, self.data[chart])
 
         data = self.data[chart]['data'][0][subidx]
 
@@ -2075,7 +2082,7 @@ class Gulik(object):
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
                 self.monitors[component] = self.monitor_table[component](self)
             elif component.startswith('netdata-'):
-                raise LookupError("Unknown netdata host '{component[8:]}'")
+                raise LookupError(f"Unknown netdata host '{component[8:]}'")
             else:
                 raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Gulik.monitor_table to enable autoloading." % component)
 
