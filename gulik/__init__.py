@@ -19,6 +19,8 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0') # not sure if want
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
+from . import netdata
+
 PAGESIZE = os.sysconf('SC_PAGESIZE')
 
 ## Helpers ##
@@ -425,7 +427,8 @@ DEFAULTS = {
     'WIDTH': 200,
     'HEIGHT': Gdk.Screen().get_default().get_height(),
     'X': 0,
-    'Y': 0
+    'Y': 0,
+    'NETDATA_HOSTS': []
 }
 
 
@@ -609,6 +612,38 @@ class BatteryCollector(Collector):
         self.queue_data.put(psutil.sensors_battery(), block=True)
 
 
+class NetdataCollector(Collector):
+
+    def __init__(self, queue_update, queue_data, host, port):
+
+        super(NetdataCollector, self).__init__(queue_update, queue_data)
+        self.client = netdata.Netdata(host, port=port)
+
+
+    def run(self):
+
+        while True:
+
+            try:
+                msg = self.queue_update.get(block=True)
+                if msg.startswith('UPDATE '):
+                    chart = msg[7:]
+                    self.update(chart)
+
+            except KeyboardInterrupt: # so we don't randomly explode on ctrl+c
+                pass
+
+
+    def update(self, chart):
+
+        try:
+            data = self.client.data(chart, points=1, after=-1) # get the last second of data condensed to one point
+        except netdata.NetdataException:
+            pass
+        else:
+            self.queue_data.put((chart, data), block=True)
+
+
 ## Monitors ##
 
 class Monitor(threading.Thread):
@@ -624,7 +659,12 @@ class Monitor(threading.Thread):
         self.queue_update = multiprocessing.Queue(1)
         self.queue_data = multiprocessing.Queue(1)
         self.collector = self.collector_type(self.queue_update, self.queue_data)
-        self.data = []
+        self.data = {}
+
+
+    def register_elements(self, elements):
+
+        print("register_elements", elements)
 
 
     def tick(self):
@@ -660,6 +700,9 @@ class CPUMonitor(Monitor):
 
     def normalize(self, element=None):
 
+        if not self.data:
+            return 0
+
         if element == 'aggregate':
             return self.data['aggregate'] / 100.0
         
@@ -669,7 +712,10 @@ class CPUMonitor(Monitor):
 
 
     def caption(self, fmt):
-        
+
+        if not self.data:
+            return fmt
+
         data = {}
         data['count'] = self.data['count']
         data['aggregate'] = self.data['aggregate']
@@ -685,17 +731,20 @@ class MemoryMonitor(Monitor):
 
     def normalize(self, element=None):
 
+        if not self.data:
+            return 0
+
         if element == 'percent':
 
-            return self.data['percent'] / 100.0
+            return self.data.get('percent', 0) / 100.0
 
-        return self.data[element]['percent'] / 100.0
+        return self.data[element].get('percent', 0) / 100.0
 
 
     def caption(self, fmt):
 
-        #print(fmt)
-        #print(self.data)
+        if not self.data:
+            return fmt
 
         data = DotDict()#dict(self.data) # clone
 
@@ -822,6 +871,9 @@ class NetworkMonitor(Monitor):
 
 
     def caption(self, fmt):
+
+        if not self.data:
+            return fmt
         
         data = {}
 
@@ -865,11 +917,17 @@ class BatteryMonitor(Monitor):
     collector_type = BatteryCollector
 
     def normalize(self, element=None):
-        if len(self.data):
-            return self.data.percent / 100.0
+
+        if not self.data:
+            return 0
+
+        return self.data.percent / 100.0
 
 
     def caption(self, fmt):
+
+        if not self.data:
+            return fmt
 
         data = self.data._asdict()
 
@@ -883,13 +941,79 @@ class BatteryMonitor(Monitor):
         return fmt.format(**data)
 
 
+class NetdataMonitor(Monitor):
+
+    collector_type = NetdataCollector
+
+    def __init__(self, app, host, port):
+
+        super(Monitor, self).__init__()
+        self.app = app
+        self.daemon = True
+
+        self.queue_update = multiprocessing.Queue(1)
+        self.queue_data = multiprocessing.Queue(1)
+        self.collector = self.collector_type(self.queue_update, self.queue_data, host, port)
+        self.charts = set()
+        self.data = {}
+
+
+    def __repr__(self):
+
+        return f"<{self.__class__.__name__} host={self.collector.client.host} port={self.collector.client.port}>"
+
+    
+    def run(self):
+
+        while self.collector.is_alive():
+            (chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+            self.data[chart] = data
+
+
+    def tick(self):
+        for chart in self.charts:
+            self.queue_update.put(f"UPDATE {chart}", block=True)
+
+
+    def normalize(self, element=None):
+
+        parts = element.split('.')
+
+        chart = '.'.join(parts[:2])
+        print(chart)
+        if chart not in self.charts or not self.data[chart]:
+            self.charts.add(chart)
+            self.data[chart] = {}
+            return 0 #
+
+
+        subelem = parts[2]
+
+        subidx = self.data[chart]['labels'].index(subelem)
+
+        print(subelem, subidx, self.data[chart])
+
+        data = self.data[chart]['data'][0][subidx]
+
+        return data/100
+   
+
+    def caption(self, fmt):
+
+        if not self.data:
+            return fmt
+
+        return "whoops"
+
+
 ## Gauges ##
 
 class Gauge(object):
 
-    def __init__(self, app, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None, operator=cairo.Operator.OVER):
+    def __init__(self, app, monitor, x=0, y=0, width=100, height=100, padding=5, elements=None, captions=None, foreground=None, background=None, pattern=None, palette=None, combination=None, operator=cairo.Operator.OVER):
 
         self.app = app
+        self.monitor = monitor
         self.x = x
         self.y = y
         self.width = width
@@ -898,6 +1022,8 @@ class Gauge(object):
         self.elements = elements if elements is not None else [None]
         self.captions = captions if captions else list()
         self.operator = operator
+
+        self.monitor.register_elements(elements)
 
         self.colors = {}
 
@@ -945,7 +1071,7 @@ class Gauge(object):
         context.fill()
 
 
-    def draw_captions(self, context, monitor):
+    def draw_captions(self, context):
 
         for caption in self.captions:
 
@@ -967,40 +1093,39 @@ class Gauge(object):
 
             position = [position[0] + self.x + self.padding, position[1] + self.y + self.padding]
 
-            caption_text = monitor.caption(caption['text'])
+            caption_text = self.monitor.caption(caption['text'])
 
             self.app.render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', None), font_size=caption.get('font_size', None))
 
             if 'operator' in caption:
                 context.restore()
 
-    def update(self, context, monitor):
+    def update(self, context):
 
         """
         parameters:
             context: cairo context of the window
-            monitor: A Monitor object holding relevant data and helper functions
         """
 
         context.save()
         context.set_operator(self.operator)
-        self.draw(context, monitor)
+        self.draw(context)
         context.restore()
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
 
         raise NotImplementedError("%s.draw not implemented!" % self.__class__.__name__)
 
 
 class MarqueeGauge(Gauge):
 
-    def __init__(self, app, text, speed=25, align=None, **kwargs):
+    def __init__(self, app, monitor, text, speed=25, align=None, **kwargs):
        
         if 'foreground' not in kwargs:
             kwargs['foreground'] = self.app.config['COLORS']['text']
 
-        super(MarqueeGauge, self).__init__(app, **kwargs)
+        super(MarqueeGauge, self).__init__(app, monitor, **kwargs)
         self.text = text # the text to be rendered, a format string passed to monitor.caption
         self.previous_text = '' # to be able to detect change
 
@@ -1026,9 +1151,9 @@ class MarqueeGauge(Gauge):
         self.step = speed / self.app.config['FPS'] # i.e. speed in pixel/s
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
         
-        text = monitor.caption(self.text)
+        text = self.monitor.caption(self.text)
 
         context.save()
         #context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
@@ -1093,7 +1218,7 @@ class RectGauge(Gauge):
             context.fill()
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
         
         colors = self.palette(self.colors['foreground'], len(self.elements))
         offset = 0.0
@@ -1102,7 +1227,7 @@ class RectGauge(Gauge):
 
         for idx, element in enumerate(self.elements):
 
-            value = monitor.normalize(element)
+            value = self.monitor.normalize(element)
 
             if self.combination != 'cumulative':
                 value /= len(self.elements)
@@ -1116,14 +1241,14 @@ class RectGauge(Gauge):
             else:
                 offset += 1.0 / len(self.elements)
 
-        self.draw_captions(context, monitor)
+        self.draw_captions(context)
 
 
 class MirrorRectGauge(Gauge):
 
-    def __init__(self, app, **kwargs):
+    def __init__(self, app, monitor, **kwargs):
 
-        super(MirrorRectGauge, self).__init__(app, **kwargs)
+        super(MirrorRectGauge, self).__init__(app, monitor, **kwargs)
         self.x_center = self.x + self.width / 2
         self.left = self.elements[0]
         self.right = self.elements[1]
@@ -1147,7 +1272,7 @@ class MirrorRectGauge(Gauge):
             context.fill()
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
 
         colors = self.palette(self.colors['foreground'], max(len(self.left), len(self.right)))
 
@@ -1159,7 +1284,7 @@ class MirrorRectGauge(Gauge):
 
             for idx, element in enumerate(elements):
                 
-                value = monitor.normalize(element)
+                value = self.monitor.normalize(element)
 
                 if self.combination != 'cumulative':
                     value /= len(elements)
@@ -1173,14 +1298,14 @@ class MirrorRectGauge(Gauge):
                 else:
                     offset += 1.0 / len(elements)
 
-        self.draw_captions(context, monitor)
+        self.draw_captions(context)
 
 
 class ArcGauge(Gauge):
 
-    def __init__(self, app, stroke_width=5, **kwargs):
+    def __init__(self, app, monitor, stroke_width=5, **kwargs):
 
-        super(ArcGauge, self).__init__(app, **kwargs)
+        super(ArcGauge, self).__init__(app, monitor, **kwargs)
         self.stroke_width = stroke_width
         self.radius = (min(self.width, self.height) / 2) - (2 * self.padding) - (self.stroke_width / 2)
         self.x_center = self.x + self.width / 2
@@ -1210,7 +1335,7 @@ class ArcGauge(Gauge):
         self.draw_arc(context, 1, self.colors['background'])
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
 
         self.draw_background(context)
 
@@ -1218,7 +1343,7 @@ class ArcGauge(Gauge):
         offset = 0.0
         for idx, element in enumerate(self.elements):
 
-            value = monitor.normalize(element)
+            value = self.monitor.normalize(element)
 
             if self.combination != 'cumulative':
                 value /= len(self.elements)
@@ -1232,14 +1357,14 @@ class ArcGauge(Gauge):
             else:
                 offset += value
 
-        self.draw_captions(context, monitor)
+        self.draw_captions(context)
 
 
 class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
-    def __init__(self, app, **kwargs):
+    def __init__(self, app, monitor, **kwargs):
 
-        super(MirrorArcGauge, self).__init__(app, **kwargs)
+        super(MirrorArcGauge, self).__init__(app, monitor, **kwargs)
         self.left = self.elements[0]
         self.right = self.elements[1]
         self.draw_left = self.draw_arc_negative
@@ -1278,9 +1403,9 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
 
 class PlotGauge(Gauge):
 
-    def __init__(self, app, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
+    def __init__(self, app, monitor, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
-        super(PlotGauge, self).__init__(app, **kwargs)
+        super(PlotGauge, self).__init__(app, monitor, **kwargs)
 
         if num_points:
             self.num_points = num_points
@@ -1289,7 +1414,7 @@ class PlotGauge(Gauge):
 
         else:
             self.step = 8
-            self.num_points = self.inner_width // self.step + 1
+            self.num_points = int(self.inner_width // self.step + 1)
 
         self.prepare_points() # creates self.points with a deque for every plot
 
@@ -1324,7 +1449,6 @@ class PlotGauge(Gauge):
 
 
     def prepare_points(self):
-
         self.points = collections.OrderedDict()
         for element in self.elements:
             self.points[element] = collections.deque([], self.num_points)
@@ -1380,7 +1504,7 @@ class PlotGauge(Gauge):
         return r
 
 
-    def draw_grid(self, context, monitor, elements=None):
+    def draw_grid(self, context, elements=None):
       
         if elements is None:
             elements = self.elements
@@ -1547,20 +1671,20 @@ class PlotGauge(Gauge):
                 context.fill()
 
 
-    def update(self, context, monitor):
+    def update(self, context):
         
         for element in set(self.elements): # without set() the same element multiple times leads to multiple same points added every time.
-            self.points[element].append(monitor.normalize(element))
+            self.points[element].append(self.monitor.normalize(element))
 
-        super(PlotGauge, self).update(context, monitor)
+        super(PlotGauge, self).update(context)
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
 
         self.draw_background(context)
 
         if self.grid:
-            self.draw_grid(context, monitor)
+            self.draw_grid(context)
 
         if self.autoscale:
             scale_factor = self.get_scale_factor()
@@ -1604,16 +1728,16 @@ class PlotGauge(Gauge):
                     offset[idx] += value
 
 
-        self.draw_captions(context, monitor)
+        self.draw_captions(context)
 
 
 class MirrorPlotGauge(PlotGauge):
 
     #scale_lock = None # bool, whether to use the same scale for up and down
 
-    def __init__(self, app, scale_lock=True, **kwargs):
+    def __init__(self, app, monitor, scale_lock=True, **kwargs):
 
-        super(MirrorPlotGauge, self).__init__(app, **kwargs)
+        super(MirrorPlotGauge, self).__init__(app, monitor, **kwargs)
         self.y_center = self.y + self.height / 2
         self.up = self.elements[0]
         self.down = self.elements[1]
@@ -1647,7 +1771,7 @@ class MirrorPlotGauge(PlotGauge):
         return super(MirrorPlotGauge, self).get_scale_factor(elements)
 
 
-    def draw_grid(self, context, monitor, elements=None):
+    def draw_grid(self, context, elements=None):
         
         context.set_line_width(1)
         context.set_source_rgba(*self.colors['grid_milli'].tuple_rgba())
@@ -1658,11 +1782,11 @@ class MirrorPlotGauge(PlotGauge):
 
         if elements == self.up:
             context.translate(0, self.grid_height)
-            super(MirrorPlotGauge, self).draw_grid(context, monitor, elements=elements)
+            super(MirrorPlotGauge, self).draw_grid(context, elements=elements)
             context.translate(0, -self.grid_height)
 
         else:
-            super(MirrorPlotGauge, self).draw_grid(context, monitor, elements=elements)
+            super(MirrorPlotGauge, self).draw_grid(context, elements=elements)
 
 
     def draw_plot(self, context, points, colors, offset=None):
@@ -1686,16 +1810,16 @@ class MirrorPlotGauge(PlotGauge):
         self.draw_plot(context, points, colors, offset=offset)
 
 
-    def update(self, context, monitor):
+    def update(self, context):
 
         for element in set(self.up + self.down):
 
-            self.points[element].append(monitor.normalize(element))
+            self.points[element].append(self.monitor.normalize(element))
 
-        super(PlotGauge, self).update(context, monitor) # TRAP: calls parent of parent, not direct parent!
+        super(PlotGauge, self).update(context) # TRAP: calls parent of parent, not direct parent!
 
 
-    def draw(self, context, monitor):
+    def draw(self, context):
 
         # TODO: This is mostly a copy-paste of PlotGauge.update+draw, needs moar DRY.
 
@@ -1704,10 +1828,10 @@ class MirrorPlotGauge(PlotGauge):
         for elements, drawer in ((self.up, self.draw_plot), (self.down, self.draw_plot_negative)):
 
             for element in set(elements):
-                self.points[element].append(monitor.normalize(element))
+                self.points[element].append(self.monitor.normalize(element))
           
             if self.grid:
-                self.draw_grid(context, monitor, elements)
+                self.draw_grid(context, elements)
 
             if self.autoscale:
                 scale_factor = self.get_scale_factor(elements)
@@ -1752,7 +1876,7 @@ class MirrorPlotGauge(PlotGauge):
                         offset[idx] += value
 
 
-        self.draw_captions(context, monitor)
+        self.draw_captions(context)
     
 
 class Gulik(object):
@@ -1770,20 +1894,26 @@ class Gulik(object):
         self.screen = Gdk.Screen.get_default()
         self.window = Window()
         self.window.connect('draw', self.draw)
-        
-        self.monitors = {}
-        #self.monitors['cpu'] = CPUMonitor()
-        #self.monitors['memory'] = MemoryMonitor()
-        #self.monitors['network'] = NetworkMonitor()
 
+        self.monitors = {}
+        self.gauges = {}
+
+        self._last_right = 0
+        self._last_top = 0
+        self._last_bottom = 0
+
+        self.setup = self.autosetup
+        self.config = {}
+
+
+    def reset(self):
+
+        self.monitors = {}
         self.gauges = {}
 
         self._last_right = 0
         self._last_top = 0
         self._last_bottom = 0 
-
-        self.setup = self.autosetup
-        self.config = {}
 
 
     def apply_config(self, path):
@@ -1811,6 +1941,19 @@ class Gulik(object):
 
         if 'setup' in config_dict:
             self.setup = functools.partial(config_dict['setup'], app=self)
+
+        self.reset() # clears out any existing gauges and monitors
+
+        for host in self.config['NETDATA_HOSTS']:
+
+            if isinstance(host, (list, tuple)): # handle (host, port) tuples and bare hostnames as values
+                host, port = host
+            else:
+                port = 19999
+
+            self.monitors[f"netdata-{host}"] = NetdataMonitor(self, host, port)
+
+        self.setup()
 
 
     def tick(self):
@@ -1883,11 +2026,12 @@ class Gulik(object):
 
         for source, monitor in self.monitors.items():
 
-            if len(monitor.data) and source in self.gauges:
+            #if len(monitor.data) and source in self.gauges:
+            if source in self.gauges:
                 gauges = self.gauges[source]
 
                 for gauge in gauges:
-                    gauge.update(context, monitor)
+                    gauge.update(context)
 
 
     def autoplace_gauge(self, component, cls, **kwargs):
@@ -1930,13 +2074,17 @@ class Gulik(object):
             if component in self.monitor_table:
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
                 self.monitors[component] = self.monitor_table[component](self)
+            elif component.startswith('netdata-'):
+                raise LookupError("Unknown netdata host '{component[8:]}'")
             else:
                 raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Gulik.monitor_table to enable autoloading." % component)
+
+        monitor = self.monitors[component]
 
         if not component in self.gauges:
             self.gauges[component] = []
             
-        gauge = cls(self, **kwargs)
+        gauge = cls(self, monitor, **kwargs)
         self.gauges[component].append(gauge)
 
         self._last_right = gauge.x + gauge.width
