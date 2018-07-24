@@ -527,33 +527,46 @@ class MemoryCollector(Collector):
         total_use = 0
         for process in psutil.process_iter():
 
-            try:
-                resident = 0
-                private = 0
-                #shared = 0
-                try:
-                    for mmap in process.memory_maps():
-                        # FIXME: startswith('[') might make this BSD-specific
-                        if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
-                            private += mmap.private * PAGESIZE
-                            resident += mmap.rss * PAGESIZE
-                            #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
-                except OSError:
-                    pass # probably "device not available"
+            if psutil.LINUX:
+                pmem = process.memory_info()
 
                 processes.append(DotDict({
                     'name': process.name(),
-                    'private': private,
-                    'shared': resident - private,
-                    'percent': private / vmem.total * 100,
+                    'private': pmem.pss,
+                    'shared': pmem.shared,
+                    'percent': pmem.pss / vmem.total * 100
                 }))
-                
-                total_use += private
 
+                total_use += pmem.pss
 
+            elif psutil.BSD:
 
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                pass#print("memory_maps failed!", e)
+                try:
+                    resident = 0
+                    private = 0
+                    #shared = 0
+                        
+                    try:
+                        for mmap in process.memory_maps():
+                            # FIXME: startswith('[') might make this BSD-specific
+                            if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
+                                private += mmap.private * PAGESIZE
+                                resident += mmap.rss * PAGESIZE
+                                #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
+                    except OSError:
+                        pass # probably "device not available"
+
+                    processes.append(DotDict({
+                        'name': process.name(),
+                        'private': private,
+                        'shared': resident - private,
+                        'percent': private / vmem.total * 100,
+                    }))
+                    
+                    total_use += private
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                    pass#print("memory_maps failed!", e)
 
         info = DotDict({
             'total': vmem.total,
