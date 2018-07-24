@@ -660,11 +660,12 @@ class Monitor(threading.Thread):
         self.queue_data = multiprocessing.Queue(1)
         self.collector = self.collector_type(self.queue_update, self.queue_data)
         self.data = {}
+        self.defective = False
 
 
     def register_elements(self, elements):
 
-        print("register_elements", elements)
+        pass#print("register_elements", elements)
 
 
     def tick(self):
@@ -956,18 +957,41 @@ class NetdataMonitor(Monitor):
         self.collector = self.collector_type(self.queue_update, self.queue_data, host, port)
         self.charts = set()
         self.data = {}
+        self.normalization_values = {}
+        
+        try:
+            self.netdata_info = self.collector.client.charts()
+        except netdata.NetdataException as e:
+            self.netdata_info = None
+            self.defective = True
 
 
     def __repr__(self):
 
         return f"<{self.__class__.__name__} host={self.collector.client.host} port={self.collector.client.port}>"
-    
+
+
     def register_elements(self, elements):
 
         for element in elements:
             parts = element.split('.')
             chart = '.'.join(parts[:2])
-            self.charts.add(chart)
+
+            if not chart in self.charts:
+
+                if self.netdata_info:
+                    if not chart in self.netdata_info['charts']:
+                        raise ValueError(f"Invalid chart: {chart} on netdata instance {self.host}:{self.port}!")
+
+                    chart_info = self.netdata_info['charts'][chart]
+                    if chart_info['units'] == 'percentage':
+                        self.normalization_values[chart] = 100
+                    else:
+                        self.normalization_values[chart] = 0
+                else:
+                    self.normalization_values[chart] = 0
+
+                self.charts.add(chart)
 
     
     def run(self):
@@ -984,13 +1008,13 @@ class NetdataMonitor(Monitor):
 
     def normalize(self, element=None):
 
+        print(element)
         parts = element.split('.')
 
         chart = '.'.join(parts[:2])
-        print(chart)
-        if chart not in self.charts or not self.data[chart]:
-            self.charts.add(chart)
-            self.data[chart] = {}
+
+        #if chart not in self.charts or not self.data[chart]:
+        if not chart in self.data:
             return 0 #
 
 
@@ -1000,9 +1024,19 @@ class NetdataMonitor(Monitor):
 
         #print(subelem, subidx, self.data[chart])
 
-        data = self.data[chart]['data'][0][subidx]
+        value = self.data[chart]['data'][0][subidx]
 
-        return data/100
+        #return data/100
+        if value >= self.normalization_values[chart]:
+            self.normalization_values[chart] = value
+
+        #print(self.normalization_values[chart])
+
+        if self.normalization_values[chart] == 0:
+            return 0
+        r = value / self.normalization_values[chart]
+        print(r)
+        return r
    
 
     def caption(self, fmt):
@@ -1466,7 +1500,8 @@ class PlotGauge(Gauge):
         if elements is None:
             elements = self.elements
 
-        if self.combination == 'cumulative_force':
+        #if self.combination == 'cumulative_force':
+        if self.combination.startswith('cumulative'):
 
             cumulative_points = []
             for idx in range(0, self.num_points):
@@ -1478,7 +1513,10 @@ class PlotGauge(Gauge):
                     except IndexError as e:
                         continue # means self.points deques aren't filled completely yet
 
-                cumulative_points.append(value / len(elements))
+                if self.combination == 'cumulative_force':
+                    cumulative_points.append(value / len(elements))
+                else:
+                    cumulative_points.append(value)
 
             p = max(cumulative_points)
 

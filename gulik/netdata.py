@@ -53,8 +53,11 @@ class Netdata(object):
             else:
                 raise NetdataError(f"Non-200 status code for {response.url}")
 
+        except requests.exceptions.ConnectionError as e:
+            raise NetdataError(f"Could not connect to netdata instance {self.host}:{self.port}!")
+
         except Exception as e:
-            raise NetdataWarning(f"Got exception: {e}")
+            raise NetdataWarning(f"Got exception while trying to communicate with netdata instance {self.host}:{self.port}: {e}")
 
 
     def charts(self):
