@@ -528,7 +528,7 @@ class MemoryCollector(Collector):
         for process in psutil.process_iter():
 
             if psutil.LINUX:
-                pmem = process.memory_info()
+                pmem = process.memory_full_info()
 
                 processes.append(DotDict({
                     'name': process.name(),
