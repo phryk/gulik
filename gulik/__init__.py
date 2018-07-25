@@ -650,7 +650,7 @@ class NetdataCollector(Collector):
     def update(self, chart):
 
         try:
-            data = self.client.data(chart, points=1, after=-1) # get the last second of data condensed to one point
+            data = self.client.data(chart, points=1, after=-1, options=['absolute']) # get the last second of data condensed to one point
         except netdata.NetdataException:
             pass
         else:
@@ -1021,7 +1021,6 @@ class NetdataMonitor(Monitor):
 
     def normalize(self, element=None):
 
-        print(element)
         parts = element.split('.')
 
         chart = '.'.join(parts[:2])
@@ -1030,25 +1029,18 @@ class NetdataMonitor(Monitor):
         if not chart in self.data:
             return 0 #
 
-
         subelem = parts[2]
-
         subidx = self.data[chart]['labels'].index(subelem)
-
-        #print(subelem, subidx, self.data[chart])
-
         value = self.data[chart]['data'][0][subidx]
 
         #return data/100
         if value >= self.normalization_values[chart]:
             self.normalization_values[chart] = value
 
-        #print(self.normalization_values[chart])
 
         if self.normalization_values[chart] == 0:
             return 0
         r = value / self.normalization_values[chart]
-        print(r)
         return r
    
 
@@ -1302,10 +1294,11 @@ class MirrorRectGauge(Gauge):
 
     def __init__(self, app, monitor, **kwargs):
 
+        self.left = kwargs['elements'][0]
+        self.right = kwargs['elements'][1]
+        kwargs['elements'] = self.left + self.right
         super(MirrorRectGauge, self).__init__(app, monitor, **kwargs)
         self.x_center = self.x + self.width / 2
-        self.left = self.elements[0]
-        self.right = self.elements[1]
         self.draw_left = self.draw_rect_negative
         self.draw_right = self.draw_rect
 
@@ -1419,8 +1412,6 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
     def __init__(self, app, monitor, **kwargs):
 
         super(MirrorArcGauge, self).__init__(app, monitor, **kwargs)
-        self.left = self.elements[0]
-        self.right = self.elements[1]
         self.draw_left = self.draw_arc_negative
         self.draw_right = self.draw_arc
 
@@ -1795,10 +1786,12 @@ class MirrorPlotGauge(PlotGauge):
 
     def __init__(self, app, monitor, scale_lock=True, **kwargs):
 
+        self.up = kwargs['elements'][0]
+        self.down = kwargs['elements'][1]
+        kwargs['elements'] = self.up + self.down
+
         super(MirrorPlotGauge, self).__init__(app, monitor, **kwargs)
         self.y_center = self.y + self.height / 2
-        self.up = self.elements[0]
-        self.down = self.elements[1]
         self.scale_lock = scale_lock
         self.grid_height /= 2
 
@@ -1812,9 +1805,8 @@ class MirrorPlotGauge(PlotGauge):
 
         self.points = collections.OrderedDict()
 
-        for elements in self.elements: # self.elements is a list like [[<elements_up>], [<elements_down>]]
-            for element in elements:
-                self.points[element] = collections.deque([], self.num_points)
+        for element in self.elements:
+            self.points[element] = collections.deque([], self.num_points)
 
 
     def get_scale_factor(self, elements=None):
