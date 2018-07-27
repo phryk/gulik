@@ -12,7 +12,8 @@ setup(  name='gulik',
         install_requires=[
             'psutil',
             'pycairo',
-            'PyGObject'
+            'PyGObject',
+            'setproctitle'
         ],
         scripts=['bin/gulik'],
         packages=['gulik'],

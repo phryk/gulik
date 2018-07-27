@@ -10,6 +10,7 @@ import collections
 import functools
 import threading
 import multiprocessing
+import setproctitle
 import psutil
 import colorsys
 import cairo
@@ -483,6 +484,8 @@ class Collector(multiprocessing.Process):
 
     def run(self):
 
+        setproctitle.setproctitle(f"gulik - {self.__class__.__name__}")
+
         while True:
 
             try:
@@ -634,6 +637,8 @@ class NetdataCollector(Collector):
 
 
     def run(self):
+
+        setproctitle.setproctitle(f"gulik - {self.__class__.__name__}")
 
         while True:
 
@@ -970,7 +975,8 @@ class NetdataMonitor(Monitor):
         self.collector = self.collector_type(self.queue_update, self.queue_data, host, port)
         self.charts = set()
         self.data = {}
-        self.normalization_values = {}
+        self.normalization_values = {} # keep a table of known maximums because netdata doesn't supply absolute normalization values
+        self.last_updates = {}
         
         try:
             self.netdata_info = self.collector.client.charts()
@@ -992,6 +998,9 @@ class NetdataMonitor(Monitor):
 
             if not chart in self.charts:
 
+                self.normalization_values[chart] = 0
+                self.last_updates[chart] = 0
+
                 if self.netdata_info:
                     if not chart in self.netdata_info['charts']:
                         raise ValueError(f"Invalid chart: {chart} on netdata instance {self.host}:{self.port}!")
@@ -1001,8 +1010,8 @@ class NetdataMonitor(Monitor):
                         self.normalization_values[chart] = 100
                     else:
                         self.normalization_values[chart] = 0
-                else:
-                    self.normalization_values[chart] = 0
+
+                    self.last_updates[chart] = chart_info['last_entry']
 
                 self.charts.add(chart)
 
@@ -1027,7 +1036,11 @@ class NetdataMonitor(Monitor):
 
         #if chart not in self.charts or not self.data[chart]:
         if not chart in self.data:
+            print(f"No data in {chart}")
             return 0 #
+
+        #timestamp = self.data[chart]['data'][0][0] # first element of a netdata datapoint is always time
+        #if timestamp > self.last_updates[chart]:
 
         subelem = parts[2]
         subidx = self.data[chart]['labels'].index(subelem)
@@ -1042,7 +1055,7 @@ class NetdataMonitor(Monitor):
             return 0
         r = value / self.normalization_values[chart]
         return r
-   
+
 
     def caption(self, fmt):
 
@@ -1816,7 +1829,16 @@ class MirrorPlotGauge(PlotGauge):
 
             scale_up = super(MirrorPlotGauge, self).get_scale_factor(self.up)
             scale_down = super(MirrorPlotGauge, self).get_scale_factor(self.down)
-            return min((scale_up, scale_down))
+
+            if (scale_up > 0) and (scale_down > 0): # both values > 0
+                return min((scale_up, scale_down))
+
+            elif (scale_up == 0) != (scale_down == 0): # one value is 0
+                return max(scale_up, scale_down)
+
+            else: # both values are 0
+                return 0
+
 
         return super(MirrorPlotGauge, self).get_scale_factor(elements)
 
@@ -1876,9 +1898,6 @@ class MirrorPlotGauge(PlotGauge):
         self.draw_background(context)
 
         for elements, drawer in ((self.up, self.draw_plot), (self.down, self.draw_plot_negative)):
-
-            for element in set(elements):
-                self.points[element].append(self.monitor.normalize(element))
           
             if self.grid:
                 self.draw_grid(context, elements)
@@ -2151,6 +2170,7 @@ class Gulik(object):
             monitor.start()
 
         signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills gulik
+        signal.signal(signal.SIGTERM, self.stop) # so kill actually kills gulik, and doesn't leave a braindead Gtk.main and Collector processes dangling around
         GLib.timeout_add(1000/self.config['FPS'], self.tick)
         self.tick()
         Gtk.main()
