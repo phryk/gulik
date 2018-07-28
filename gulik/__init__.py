@@ -480,6 +480,7 @@ class Collector(multiprocessing.Process):
         self.daemon = True
         self.queue_update = queue_update
         self.queue_data = queue_data
+        self.elements = []
 
 
     def run(self):
@@ -678,12 +679,11 @@ class Monitor(threading.Thread):
         self.queue_data = multiprocessing.Queue(1)
         self.collector = self.collector_type(self.queue_update, self.queue_data)
         self.data = {}
-        self.defective = False
+        self.defective = False # for future use, mostly for networked monitors (netdata, mpd, …)
 
 
     def register_elements(self, elements):
-
-        pass#print("register_elements", elements)
+        pass
 
 
     def tick(self):
@@ -1036,7 +1036,7 @@ class NetdataMonitor(Monitor):
 
         #if chart not in self.charts or not self.data[chart]:
         if not chart in self.data:
-            print(f"No data in {chart}")
+            print(f"No data for {chart}")
             return 0 #
 
         #timestamp = self.data[chart]['data'][0][0] # first element of a netdata datapoint is always time
@@ -1062,7 +1062,41 @@ class NetdataMonitor(Monitor):
         if not self.data:
             return fmt
 
-        return "whoops"
+        data = DotDict()
+
+        for chart_name, chart_data in self.data.items():
+
+            chart_keys = chart_name.split('.')
+            unit = self.netdata_info['charts'][chart_name]['units'] # called "units" but actually only ever one. it's a string.
+
+            if not chart_keys[0] in data:
+                data[chart_keys[0]] = DotDict()
+
+            d = DotDict()
+
+            for idx, label in enumerate(chart_data['labels']):
+                value = chart_data['data'][0][idx]
+
+                if unit == 'bytes':
+                    value = pretty_bytes(value)
+
+                elif unit.startswith('kilobytes'):
+
+                    postfix = unit[9:]
+                    value = pretty_bytes(value * 1024) + postfix
+
+                elif unit.startswith('kilobits'):
+                    postfix = unit[8:]
+                    value = pretty_bits(value * 1024) + postfix
+
+                else:
+                    value = f"{value} {unit}"
+
+                d[label] = value
+            
+            data[chart_keys[0]][chart_keys[1]] = d
+
+        return fmt.format(**data)
 
 
 ## Gauges ##
