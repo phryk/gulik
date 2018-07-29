@@ -6,12 +6,9 @@ import gulik
 
 def main():
 
+    configpath = os.path.expanduser('~/.config/gulik/config.py')
     setproctitle.setproctitle('gulik')
-    app = gulik.Gulik()
-
-    config_path = os.path.expanduser('~/.config/gulik/config.py') # TODO: allow path to be passed as arg
-    app.apply_config(config_path)
-
+    app = gulik.Gulik(configpath)
     app.start()
 
 

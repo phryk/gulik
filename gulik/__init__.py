@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import math
 import time
 import random
 import signal
 import collections
+import queue
 import functools
 import threading
 import multiprocessing
@@ -483,6 +485,14 @@ class Collector(multiprocessing.Process):
         self.elements = []
 
 
+    def terminate(self):
+
+        self.queue_update.close()
+        self.queue:data.close()
+        os.kill(self.pid, signal.SIGKILL) # Would've done it cleaner, but after half a day of chasing some retarded quantenbug I'm done with this shit. Just nuke the fucking things from orbit.
+        #super(Collector, self).terminate()
+
+
     def run(self):
 
         setproctitle.setproctitle(f"gulik - {self.__class__.__name__}")
@@ -674,6 +684,7 @@ class Monitor(threading.Thread):
         super(Monitor, self).__init__()
         self.app = app
         self.daemon = True
+        self.seppuku = False
 
         self.queue_update = multiprocessing.Queue(1)
         self.queue_data = multiprocessing.Queue(1)
@@ -700,9 +711,28 @@ class Monitor(threading.Thread):
 
     def run(self):
 
-        while self.collector.is_alive():
-            data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
-            self.data = data
+        #while self.collector.is_alive():
+        while not self.seppuku:
+            #data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+
+            try:
+                self.data = self.queue_data.get(timeout=1)
+            except queue.Empty:
+                pass # try again, but give thread the ability to die without waiting on collector indefinitely
+
+        self.commit_seppuku()
+
+
+    def commit_seppuku(self):
+
+        print(f"{self.__class__.__name__} committing glorious seppuku!")
+
+        self.queue_data.close()
+        self.queue_update.close()
+        self.collector.terminate()
+        #print(f"TERMINATED {self.collector.pid}")
+        self.collector.join()
+        #print(f"JOINED {self.collector.pid}")
 
 
     def normalize(self, element=None):
@@ -822,9 +852,13 @@ class NetworkMonitor(Monitor):
 
     def run(self):
 
-        while self.collector.is_alive():
-            data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
-            self.data = data
+        while not self.seppuku:
+
+            #data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+            try:
+                self.data = self.queue_data.get(timeout=1)
+            except queue.Empty:
+                pass # try again, but give thread the ability to die without waiting on collector indefinitely
             
             aggregates = {}
             for key in self.aggregate['counters']:
@@ -851,6 +885,8 @@ class NetworkMonitor(Monitor):
 
             for key, value in aggregates.items():
                 self.aggregate['counters'][key].append(value)
+
+        self.commit_seppuku()
 
 
     def count_sec(self, interface, key):
@@ -966,15 +1002,11 @@ class NetdataMonitor(Monitor):
 
     def __init__(self, app, host, port):
 
-        super(Monitor, self).__init__()
-        self.app = app
-        self.daemon = True
+        self.collector_type = functools.partial(self.collector_type, host=host, port=port)
 
-        self.queue_update = multiprocessing.Queue(1)
-        self.queue_data = multiprocessing.Queue(1)
-        self.collector = self.collector_type(self.queue_update, self.queue_data, host, port)
+        super(NetdataMonitor, self).__init__(app)
+
         self.charts = set()
-        self.data = {}
         self.normalization_values = {} # keep a table of known maximums because netdata doesn't supply absolute normalization values
         self.last_updates = {}
         
@@ -1018,14 +1050,23 @@ class NetdataMonitor(Monitor):
     
     def run(self):
 
-        while self.collector.is_alive():
-            (chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
-            self.data[chart] = data
+        #while self.collector.is_alive():
+        while not self.seppuku:
+            #(chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+            try:
+                (chart, data) = self.queue_data.get(timeout=1)
+                self.data[chart] = data
+            except queue.Empty:
+                pass # try again
+
+        self.commit_seppuku()
 
 
     def tick(self):
-        for chart in self.charts:
-            self.queue_update.put(f"UPDATE {chart}", block=True)
+        if not self.queue_update.full():
+        #if not self.seppuku: # don't request more updates to collector when we're trying to die
+            for chart in self.charts:
+                self.queue_update.put(f"UPDATE {chart}", block=True)
 
 
     def normalize(self, element=None):
@@ -2050,41 +2091,50 @@ class Gulik(object):
     }
 
 
-    def __init__(self):
+    def __init__(self, configpath):
 
         self.screen = Gdk.Screen.get_default()
         self.window = Window()
         self.window.connect('draw', self.draw)
 
+        self.configpath = configpath
+        self.config = {}
+        self.setup = self.autosetup
+
         self.monitors = {}
         self.gauges = []
         self.boxes = []
 
-        self.setup = self.autosetup
-        self.config = {}
+        self.apply_config()
 
 
     def reset(self):
 
+        for monitor in self.monitors.values(): # kill any existing monitors
+            monitor.seppuku = True
+
         self.monitors = {}
         self.gauges = []
         self.boxes = []
 
 
-    def apply_config(self, path):
+    def apply_config(self):
 
+        print(f"Trying to load config from {self.configpath}…")
+
+        self.config = {}
         config_dict = {}
         try:
-            fd = open(path, mode='r')
+            fd = open(self.configpath, mode='r')
             config_string = fd.read()
         except OSError as e:
-            print("No config at '%s' or insufficient permissions to read it. Falling back to defaults…" % path)
+            print("No config at '%s' or insufficient permissions to read it. Falling back to defaults…" % self.configpath)
 
         else:
             try:
                 exec(config_string, config_dict)
             except Exception as e:
-                print("Error in '%s': %s" % (path, e))
+                print("Error in '%s': %s" % (self.configpath, e))
                 print("Falling back to defaults…")
                 config_dict = DEFAULTS # because config_dict might be contaminated by half-done exec
 
@@ -2096,9 +2146,12 @@ class Gulik(object):
 
         if 'setup' in config_dict:
             self.setup = functools.partial(config_dict['setup'], app=self)
+        else:
+            self.setup = self.autosetup
 
         self.reset() # clears out any existing gauges and monitors
 
+        # create monitors for all netdata hosts
         for host in self.config['NETDATA_HOSTS']:
 
             if isinstance(host, (list, tuple)): # handle (host, port) tuples and bare hostnames as values
@@ -2108,7 +2161,19 @@ class Gulik(object):
 
             self.monitors[f"netdata-{host}"] = NetdataMonitor(self, host, port)
 
+        # NOTE: psutil-based monitors are autoloaded in add_gauge and thus don't have to be handled here like netdata monitors
+
+        # finally, run the actual setup function to place all gauges
         self.setup()
+        print("Done.")
+
+
+    def signal_reload(self, *_):
+
+        self.apply_config() # re-creates monitors and gauges
+
+        for monitor in self.monitors.values():
+            monitor.start()
 
 
     def tick(self):
@@ -2193,13 +2258,32 @@ class Gulik(object):
 
         signal.signal(signal.SIGINT, self.stop) # so ctrl+c actually kills gulik
         signal.signal(signal.SIGTERM, self.stop) # so kill actually kills gulik, and doesn't leave a braindead Gtk.main and Collector processes dangling around
+        signal.signal(signal.SIGUSR1, self.signal_reload) # reload config on user-defined signal. (no, not HUP)
         GLib.timeout_add(1000/self.config['FPS'], self.tick)
-        self.tick()
+        self.tick() # first tick without delay so we get output asap
         Gtk.main()
         print("\nThank you for flying with phryk evil mad sciences, LLC. Please come again.")
 
 
     def stop(self, num, frame):
+
+        spinner = '▏▎▍▌▋▊▉▉▊▋▌▍▎'
+
+        for monitor in self.monitors.values():
+            monitor.seppuku = True
+            i = 0
+            while monitor.is_alive():
+                #pass # wait for the thread to be dead
+                i += 1
+
+                spinner_idx = i % len(spinner)
+
+                sys.stdout.write(f"\r{spinner[spinner_idx]}    ")
+                sys.stdout.flush()
+                time.sleep(1/24)
+
+            #sys.stdout.write("\rn")
+            #sys.stdout.flush()
 
         Gtk.main_quit()
 
@@ -2245,8 +2329,8 @@ class Gulik(object):
             ArcGauge,
             #elements=['aggregate'],
             elements=all_cores,
-            width=self.window.width, 
-            height=self.window.width,
+            width=box.width, 
+            height=box.width,
             stroke_width=10,
             combination='cumulative_force',
             captions=[
@@ -2266,20 +2350,20 @@ class Gulik(object):
             ]
         )
 
-        #box.place('cpu', ArcGauge, elements=['core_0'], width=self.window.width / 4, height=self.window.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
-        box.place('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        #box.place('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
-        #box.place('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
+        #box.place('cpu', ArcGauge, elements=['core_0'], width=box.width / 4, height=box.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_1'], width=box.width / 4, height=box.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_2'], width=box.width / 4, height=box.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_3'], width=box.width / 4, height=box.width / 4)
+        box.place('cpu', PlotGauge, elements=all_cores, width=box.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
+        #box.place('cpu', PlotGauge, elements=all_cores, width=box.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
+        #box.place('cpu', RectGauge, elements=all_cores, width=box.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
 
         box.place(
             'memory',
             ArcGauge,
             elements=['other', 'top_3', 'top_2', 'top_1'],
-            width=self.window.width,
-            height=self.window.width,
+            width=box.width,
+            height=box.width,
             stroke_width=30,
             combination='cumulative',
             captions=[
@@ -2301,10 +2385,10 @@ class Gulik(object):
 
         last_gauge = self.gauges[-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        box.place('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=self.window.width, height=25, foreground=palette[0]) 
-        box.place('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[1]) 
-        box.place('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=self.window.width, height=25, foreground=palette[2]) 
-        box.place('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=self.window.width, height=25, foreground=palette[3]) 
+        box.place('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=box.width, height=25, foreground=palette[0]) 
+        box.place('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=box.width, height=25, foreground=palette[1]) 
+        box.place('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=box.width, height=25, foreground=palette[2]) 
+        box.place('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=box.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -2316,7 +2400,7 @@ class Gulik(object):
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
 
-        box.place('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
+        box.place('network', MirrorArcGauge, width=box.width, height=box.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
                     #'text': '{em0.all_addrs}',
@@ -2326,7 +2410,7 @@ class Gulik(object):
             ]
         )
 
-        box.place('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
+        box.place('network', MirrorPlotGauge, width=box.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
 
         alignments = ['left_top', 'center_top','right_top']
         palette = self.gauges[-1].colors_plot_marker
@@ -2334,16 +2418,16 @@ class Gulik(object):
             # build a legend
             color = palette[idx]
             align = alignments[idx % 3] # boom.
-            box.place('network', MarqueeGauge, text=if_name, foreground=color, width=self.window.width/3, height=25, padding=5, align=align)
+            box.place('network', MarqueeGauge, text=if_name, foreground=color, width=box.width/3, height=25, padding=5, align=align)
 
-        #box.place('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
+        #box.place('network', MarqueeGauge, width=box.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
 
-        #box.place('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
+        #box.place('network', MirrorPlotGauge, width=box.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
         
 
         if psutil.sensors_battery() is not None:
 
-            box.place('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
+            box.place('battery', RectGauge, width=box.width, height=60, padding=15, captions=[
                     {
                         'text': '{state}…',
                         'position': 'left_center',
