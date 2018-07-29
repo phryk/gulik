@@ -1611,7 +1611,7 @@ class PlotGauge(Gauge):
         context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
         #context.set_dash([1,1])
 
-        for x in range(self.x + self.padding, self.x + self.padding + self.inner_width, int(self.step)):
+        for x in range(int(self.x + self.padding), int(self.x + self.padding + self.inner_width), int(self.step)):
             context.move_to(x, self.y + self.padding)
             context.line_to(x, self.y + self.padding + self.grid_height)
         
@@ -1697,7 +1697,7 @@ class PlotGauge(Gauge):
                 amplitude += offset[idx]
 
             coords.append((
-                idx * self.step + self.padding,
+                self.x + idx * self.step + self.padding,
                 self.y + self.padding + self.inner_height - (self.inner_height * amplitude)
             ))
       
