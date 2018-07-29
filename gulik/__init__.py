@@ -1980,7 +1980,65 @@ class MirrorPlotGauge(PlotGauge):
 
 
         self.draw_captions(context)
-    
+
+
+class Box(object):
+
+    """
+        Can wrap multiple Gauges, used for layouting.
+        Orders added gauges from left to right and top to bottom.
+    """
+
+    def __init__(self, app, x, y, width, height):
+
+        self._last_right = 0
+        self._last_top = 0
+        self._last_bottom = 0 
+
+        self.app = app
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+
+
+    def place(self, component, cls, **kwargs):
+
+        width = kwargs.get('width', None)
+        height = kwargs.get('height', None)
+
+        if width is None:
+            width = self.width - self._last_right
+
+            if height is None:
+                height = self._last_bottom - self._last_top # same height as previous gauge
+
+                if height == 0: # should only happen on first gauge
+                    height = self.height
+
+        elif height is None:
+            height = self.height - self._last_bottom
+
+        if self._last_right + width > self.width: # move to next "row"
+            x = self.x # 0 left offset
+            y = self.y + self._last_bottom
+
+        else:
+            x = self.x + self._last_right
+            y = self.y + self._last_top
+
+
+        kwargs['x'] = x
+        kwargs['y'] = y
+        kwargs['width'] = width
+        kwargs['height'] = height
+
+        self.app.add_gauge(component, cls, **kwargs)
+
+        self._last_right = x + width
+        self._last_top = y
+        self._last_bottom = y + height
+
 
 class Gulik(object):
 
@@ -1999,11 +2057,8 @@ class Gulik(object):
         self.window.connect('draw', self.draw)
 
         self.monitors = {}
-        self.gauges = {}
-
-        self._last_right = 0
-        self._last_top = 0
-        self._last_bottom = 0
+        self.gauges = []
+        self.boxes = []
 
         self.setup = self.autosetup
         self.config = {}
@@ -2012,11 +2067,8 @@ class Gulik(object):
     def reset(self):
 
         self.monitors = {}
-        self.gauges = {}
-
-        self._last_right = 0
-        self._last_top = 0
-        self._last_bottom = 0 
+        self.gauges = []
+        self.boxes = []
 
 
     def apply_config(self, path):
@@ -2127,72 +2179,8 @@ class Gulik(object):
 
         self.draw_gulik(context)
 
-        for source, monitor in self.monitors.items():
-
-            #if len(monitor.data) and source in self.gauges:
-            if source in self.gauges:
-                gauges = self.gauges[source]
-
-                for gauge in gauges:
-                    gauge.update(context)
-
-
-    def autoplace_gauge(self, component, cls, **kwargs):
-
-        width = kwargs.get('width', None)
-        height = kwargs.get('height', None)
-
-        if width is None:
-            width = self.window.width - self._last_right
-
-            if height is None:
-                height = self._last_bottom - self._last_top # same height as previous gauge
-
-                if height == 0: # should only happen on first gauge
-                    height = self.window.height
-
-        elif height is None:
-            height = self.window.height - self._last_bottom
-
-        if self._last_right + width > self.window.width: # move to next "row"
-            x = 0
-            y = self._last_bottom
-
-        else:
-            x = self._last_right
-            y = self._last_top
-
-
-        kwargs['x'] = x
-        kwargs['y'] = y
-        kwargs['width'] = width
-        kwargs['height'] = height
-
-        self.add_gauge(component, cls, **kwargs)
-
-
-    def add_gauge(self, component, cls, **kwargs):
-
-        if not component in self.monitors:
-            if component in self.monitor_table:
-                print("Autoloading %s!" % self.monitor_table[component].__name__)
-                self.monitors[component] = self.monitor_table[component](self)
-            elif component.startswith('netdata-'):
-                raise LookupError(f"Unknown netdata host '{component[8:]}'")
-            else:
-                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Gulik.monitor_table to enable autoloading." % component)
-
-        monitor = self.monitors[component]
-
-        if not component in self.gauges:
-            self.gauges[component] = []
-            
-        gauge = cls(self, monitor, **kwargs)
-        self.gauges[component].append(gauge)
-
-        self._last_right = gauge.x + gauge.width
-        self._last_top = gauge.y
-        self._last_bottom = gauge.y + gauge.height
+        for gauge in self.gauges:
+            gauge.update(context)
 
 
     def start(self):
@@ -2216,15 +2204,43 @@ class Gulik(object):
         Gtk.main_quit()
 
 
-    def autosetup(self):
+    def box(self, x=0, y=0, width=None, height=None): 
 
-        # this function should automatically put together a sane collection of gauges for a system, but doesn't really do that yet.
+        width = width if not width is None else self.window.width
+        height = height if not height is None else self.window.height
+
+        box = Box(self, x, y, width, height)
+        self.boxes.append(box)
+        return box
+
+
+    def add_gauge(self, component, cls, **kwargs):
+
+        if not component in self.monitors:
+            if component in self.monitor_table:
+                print("Autoloading %s!" % self.monitor_table[component].__name__)
+                self.monitors[component] = self.monitor_table[component](self)
+            elif component.startswith('netdata-'):
+                raise LookupError(f"Unknown netdata host '{component[8:]}'")
+            else:
+                raise LookupError("No monitor class known for component '%s'. Custom monitor classes have to be added to Gulik.monitor_table to enable autoloading." % component)
+
+        monitor = self.monitors[component]
+
+            
+        gauge = cls(self, monitor, **kwargs)
+        self.gauges.append(gauge)
+
+
+    def autosetup(self, x=0, y=0, width=None, height=None):
+
+        box = self.box(x, y, width, height)
 
         cpu_num = psutil.cpu_count()
         all_cores = ['core_%d' % x for x in range(0, cpu_num)]
 
 
-        self.autoplace_gauge(
+        box.place(
             'cpu',
             ArcGauge,
             #elements=['aggregate'],
@@ -2250,15 +2266,15 @@ class Gulik(object):
             ]
         )
 
-        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_0'], width=self.window.width / 4, height=self.window.width / 4)
-        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
-        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
-        #self.autoplace_gauge('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
-        self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        #self.autoplace_gauge('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
-        #self.autoplace_gauge('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
+        #box.place('cpu', ArcGauge, elements=['core_0'], width=self.window.width / 4, height=self.window.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_1'], width=self.window.width / 4, height=self.window.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_2'], width=self.window.width / 4, height=self.window.width / 4)
+        #box.place('cpu', ArcGauge, elements=['core_3'], width=self.window.width / 4, height=self.window.width / 4)
+        box.place('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
+        #box.place('cpu', PlotGauge, elements=all_cores, width=self.window.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
+        #box.place('cpu', RectGauge, elements=all_cores, width=self.window.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
 
-        self.autoplace_gauge(
+        box.place(
             'memory',
             ArcGauge,
             elements=['other', 'top_3', 'top_2', 'top_1'],
@@ -2283,12 +2299,12 @@ class Gulik(object):
             ]
         )
 
-        last_gauge = self.gauges['memory'][-1]
+        last_gauge = self.gauges[-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=self.window.width, height=25, foreground=palette[0]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[1]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=self.window.width, height=25, foreground=palette[2]) 
-        self.autoplace_gauge('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=self.window.width, height=25, foreground=palette[3]) 
+        box.place('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=self.window.width, height=25, foreground=palette[0]) 
+        box.place('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=self.window.width, height=25, foreground=palette[1]) 
+        box.place('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=self.window.width, height=25, foreground=palette[2]) 
+        box.place('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=self.window.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -2300,7 +2316,7 @@ class Gulik(object):
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
 
-        self.autoplace_gauge('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
+        box.place('network', MirrorArcGauge, width=self.window.width, height=self.window.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
                     #'text': '{em0.all_addrs}',
@@ -2310,24 +2326,24 @@ class Gulik(object):
             ]
         )
 
-        self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
+        box.place('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
 
         alignments = ['left_top', 'center_top','right_top']
-        palette = self.gauges['network'][-1].colors_plot_marker
+        palette = self.gauges[-1].colors_plot_marker
         for idx, if_name in enumerate(all_nics):
             # build a legend
             color = palette[idx]
             align = alignments[idx % 3] # boom.
-            self.autoplace_gauge('network', MarqueeGauge, text=if_name, foreground=color, width=self.window.width/3, height=25, padding=5, align=align)
+            box.place('network', MarqueeGauge, text=if_name, foreground=color, width=self.window.width/3, height=25, padding=5, align=align)
 
-        #self.autoplace_gauge('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
+        #box.place('network', MarqueeGauge, width=self.window.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
 
-        #self.autoplace_gauge('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
+        #box.place('network', MirrorPlotGauge, width=self.window.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
         
 
         if psutil.sensors_battery() is not None:
 
-            self.autoplace_gauge('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
+            box.place('battery', RectGauge, width=self.window.width, height=60, padding=15, captions=[
                     {
                         'text': '{state}…',
                         'position': 'left_center',
