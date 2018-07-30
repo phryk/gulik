@@ -487,7 +487,7 @@ class Collector(multiprocessing.Process):
 
     def terminate(self):
 
-        self.queue_data.close()
+        #self.queue_data.close()
         os.kill(self.pid, signal.SIGKILL) # Would've done it cleaner, but after half a day of chasing some retarded quantenbug I'm done with this shit. Just nuke the fucking things from orbit.
         #super(Collector, self).terminate()
 
@@ -726,7 +726,7 @@ class Monitor(threading.Thread):
 
         print(f"{self.__class__.__name__} committing glorious seppuku!")
 
-        self.queue_update.close()
+        #self.queue_update.close()
         self.collector.terminate()
         #print(f"TERMINATED {self.collector.pid}")
         self.collector.join()
@@ -856,7 +856,7 @@ class NetworkMonitor(Monitor):
             try:
                 self.data = self.queue_data.get(timeout=1)
             except queue.Empty:
-                pass # try again, but give thread the ability to die without waiting on collector indefinitely
+                continue # try again, but give thread the ability to die without waiting on collector indefinitely
             
             aggregates = {}
             for key in self.aggregate['counters']:
@@ -865,21 +865,27 @@ class NetworkMonitor(Monitor):
 
             self.aggregate['speed'] = 0
             for if_name, if_data in self.interfaces.items():
-               
-                for key, deque in if_data['counters'].items():
-                    value = self.data['counters'][if_name]._asdict()[key]
-                    deque.append(value)
-                    aggregates[key] += value
-                self.interfaces[if_name]['stats'] = self.data['stats'][if_name]._asdict()
-                if self.interfaces[if_name]['stats']['speed'] == 0:
-                    self.interfaces[if_name]['stats']['speed'] = 1000 # assume gbit speed per default
 
-                self.aggregate['speed'] += self.interfaces[if_name]['stats']['speed']
-                
-                if if_name in self.data['addrs']:
-                    self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
+                if_has_data = if_name in self.data['counters'] and if_name in self.data['stats'] and if_name in self.data['addrs']
+
+                if if_has_data:
+
+                    for key, deque in if_data['counters'].items():
+                        value = self.data['counters'][if_name]._asdict()[key]
+                        deque.append(value)
+                        aggregates[key] += value
+                    self.interfaces[if_name]['stats'] = self.data['stats'][if_name]._asdict()
+                    if self.interfaces[if_name]['stats']['speed'] == 0:
+                        self.interfaces[if_name]['stats']['speed'] = 1000 # assume gbit speed per default
+
+                    self.aggregate['speed'] += self.interfaces[if_name]['stats']['speed']
+                    
+                    if if_name in self.data['addrs']:
+                        self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
+                    else:
+                        self.interfaces[if_name]['addrs'] = []
                 else:
-                    self.interfaces[if_name]['addrs'] = []
+                    print("yup, this if just saved our ass<------------------------------------------------")
 
             for key, value in aggregates.items():
                 self.aggregate['counters'][key].append(value)
@@ -1050,12 +1056,32 @@ class NetdataMonitor(Monitor):
 
         #while self.collector.is_alive():
         while not self.seppuku:
-            #(chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
-            try:
-                (chart, data) = self.queue_data.get(timeout=1)
-                self.data[chart] = data
-            except queue.Empty:
-                pass # try again
+
+            if self.defective:
+
+                print(f"{self.__class__.__name__} instance currently defective, trying to get netdata overview from remote host.")
+                try:
+                    self.netdata_info = self.collector.client.charts()
+                    self.defective = False
+                except netdata.NetdataException as e:
+                    print("Failed, will retry on next frame.")
+                    sleep(1/self.config['FPS'])
+
+            else:
+
+                #(chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
+                try:
+                    (chart, data) = self.queue_data.get(timeout=1)
+                    self.data[chart] = data
+
+                    if self.netdata_info['charts'][chart]['units'] != 'percentage':
+
+                        cumulative_value = sum(data['data'][0][1:])
+                        if self.normalization_values[chart] < cumulative_value:
+                            self.normalization_values[chart] = cumulative_value
+
+                except queue.Empty:
+                    pass # try again
 
         self.commit_seppuku()
 
@@ -1173,6 +1199,11 @@ class Gauge(object):
         self.palette = palette or self.app.config['PALETTE'] # function to generate color palettes with
 
         self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
+
+
+    #def rename_me(self, name):
+
+        
 
 
 
@@ -2270,8 +2301,9 @@ class Gulik(object):
         for monitor in self.monitors.values():
             monitor.seppuku = True
             i = 0
-            while monitor.is_alive():
-                #pass # wait for the thread to be dead
+
+            while monitor.is_alive(): # show spinner animation until the monitor is finished
+
                 i += 1
 
                 spinner_idx = i % len(spinner)
