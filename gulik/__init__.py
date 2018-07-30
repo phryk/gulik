@@ -487,8 +487,7 @@ class Collector(multiprocessing.Process):
 
     def terminate(self):
 
-        self.queue_update.close()
-        self.queue:data.close()
+        self.queue_data.close()
         os.kill(self.pid, signal.SIGKILL) # Would've done it cleaner, but after half a day of chasing some retarded quantenbug I'm done with this shit. Just nuke the fucking things from orbit.
         #super(Collector, self).terminate()
 
@@ -727,7 +726,6 @@ class Monitor(threading.Thread):
 
         print(f"{self.__class__.__name__} committing glorious seppuku!")
 
-        self.queue_data.close()
         self.queue_update.close()
         self.collector.terminate()
         #print(f"TERMINATED {self.collector.pid}")
