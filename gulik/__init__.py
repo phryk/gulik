@@ -435,6 +435,9 @@ DEFAULTS = {
     'COLOR_TEXT_MINOR': Color(1,1,1, 0.3),
 
     'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
+    'PATTERN': stripe45,
+    'PATTERN_ARC': None,
+    'PATTERN_MIRRORARC': None,
 }
 
 
@@ -731,9 +734,7 @@ class Monitor(threading.Thread):
 
         #self.queue_update.close()
         self.collector.terminate()
-        #print(f"TERMINATED {self.collector.pid}")
         self.collector.join()
-        #print(f"JOINED {self.collector.pid}")
 
 
     def normalize(self, element=None):
@@ -855,7 +856,6 @@ class NetworkMonitor(Monitor):
 
         while not self.seppuku:
 
-            #data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
             try:
                 self.data = self.queue_data.get(timeout=1)
             except queue.Empty:
@@ -1072,7 +1072,6 @@ class NetdataMonitor(Monitor):
 
             else:
 
-                #(chart, data) = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
                 try:
                     (chart, data) = self.queue_data.get(timeout=1)
                     self.data[chart] = data
@@ -1084,7 +1083,7 @@ class NetdataMonitor(Monitor):
                             self.normalization_values[chart] = cumulative_value
 
                 except queue.Empty:
-                    pass # try again
+                    continue # try again
 
         self.commit_seppuku()
 
@@ -1114,7 +1113,6 @@ class NetdataMonitor(Monitor):
         subidx = self.data[chart]['labels'].index(subelem)
         value = self.data[chart]['data'][0][subidx]
 
-        #return data/100
         if value >= self.normalization_values[chart]:
             self.normalization_values[chart] = value
 
@@ -1199,7 +1197,7 @@ class Gauge(object):
         else:
             self.colors['background'] = background
 
-        self.pattern = pattern
+        self.pattern = pattern or self.get_style('pattern')
         self.palette = palette or self.get_style('palette') # function to generate color palettes with
 
         self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
@@ -1219,7 +1217,6 @@ class Gauge(object):
         if subname:
             keys.append('_'.join([name, subname]).upper())
         keys.append(name.upper())
-
         for key in keys:
             if key in self.app.config:
                 return self.app.config[key]
@@ -1299,14 +1296,14 @@ class Gauge(object):
         raise NotImplementedError("%s.draw not implemented!" % self.__class__.__name__)
 
 
-class MarqueeGauge(Gauge):
+class Text(Gauge):
 
     def __init__(self, app, monitor, text, speed=25, align=None, **kwargs):
        
         if 'foreground' not in kwargs:
             kwargs['foreground'] = self.get_style('color', 'text')
 
-        super(MarqueeGauge, self).__init__(app, monitor, **kwargs)
+        super(Text, self).__init__(app, monitor, **kwargs)
         self.text = text # the text to be rendered, a format string passed to monitor.caption
         self.previous_text = '' # to be able to detect change
 
@@ -1337,7 +1334,6 @@ class MarqueeGauge(Gauge):
         text = self.monitor.caption(self.text)
 
         context.save()
-        #context.rectangle(self.x + self.padding, self.y + self.padding, self.inner_width, self.inner_height)
         context.rectangle(self.x, self.y, self.width, self.height)
         context.clip()
 
@@ -1389,7 +1385,7 @@ class MarqueeGauge(Gauge):
         self.previous_text = text
 
 
-class RectGauge(Gauge):
+class Rect(Gauge):
 
     def draw_rect(self, context, value, color, offset=0.0):
 
@@ -1425,14 +1421,14 @@ class RectGauge(Gauge):
         self.draw_captions(context)
 
 
-class MirrorRectGauge(Gauge):
+class MirrorRect(Gauge):
 
     def __init__(self, app, monitor, **kwargs):
 
         self.left = kwargs['elements'][0]
         self.right = kwargs['elements'][1]
         kwargs['elements'] = self.left + self.right
-        super(MirrorRectGauge, self).__init__(app, monitor, **kwargs)
+        super(MirrorRect, self).__init__(app, monitor, **kwargs)
         self.x_center = self.x + self.width / 2
         self.draw_left = self.draw_rect_negative
         self.draw_right = self.draw_rect
@@ -1483,11 +1479,11 @@ class MirrorRectGauge(Gauge):
         self.draw_captions(context)
 
 
-class ArcGauge(Gauge):
+class Arc(Gauge):
 
     def __init__(self, app, monitor, stroke_width=5, **kwargs):
 
-        super(ArcGauge, self).__init__(app, monitor, **kwargs)
+        super(Arc, self).__init__(app, monitor, **kwargs)
         self.stroke_width = stroke_width
         self.radius = (min(self.width, self.height) / 2) - (2 * self.padding) - (self.stroke_width / 2)
         self.x_center = self.x + self.width / 2
@@ -1542,11 +1538,11 @@ class ArcGauge(Gauge):
         self.draw_captions(context)
 
 
-class MirrorArcGauge(MirrorRectGauge, ArcGauge):
+class MirrorArc(MirrorRect, Arc):
 
     def __init__(self, app, monitor, **kwargs):
 
-        super(MirrorArcGauge, self).__init__(app, monitor, **kwargs)
+        super(MirrorArc, self).__init__(app, monitor, **kwargs)
         self.draw_left = self.draw_arc_negative
         self.draw_right = self.draw_arc
 
@@ -1556,7 +1552,7 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
         value /= 2
         offset /= 2
 
-        super(MirrorArcGauge, self).draw_arc(context, value, color, offset=offset)
+        super(MirrorArc, self).draw_arc(context, value, color, offset=offset)
 
 
     def draw_arc_negative(self, context, value, color, offset=0.0):
@@ -1581,11 +1577,11 @@ class MirrorArcGauge(MirrorRectGauge, ArcGauge):
         self.draw_arc(context, 2, self.colors['background'])
 
 
-class PlotGauge(Gauge):
+class Plot(Gauge):
 
     def __init__(self, app, monitor, num_points=None, autoscale=True, markers=True, line=True, grid=True, **kwargs):
 
-        super(PlotGauge, self).__init__(app, monitor, **kwargs)
+        super(Plot, self).__init__(app, monitor, **kwargs)
 
         if num_points:
             self.num_points = num_points
@@ -1639,7 +1635,6 @@ class PlotGauge(Gauge):
         if elements is None:
             elements = self.elements
 
-        #if self.combination == 'cumulative_force':
         if self.combination.startswith('cumulative'):
 
             cumulative_points = []
@@ -1724,7 +1719,6 @@ class PlotGauge(Gauge):
 
             elif scale_factor > 100:
                 # current maximum under 1 percent, place permill guides
-                # TODO: set color from self/theme
                 context.set_source_rgba(*self.colors['grid_milli'].tuple_rgba())
                 for i in range(0, 10):
                     # place lines for 0-9 percent
@@ -1741,7 +1735,6 @@ class PlotGauge(Gauge):
 
             elif scale_factor > 10:
 
-                # TODO: set color from self/theme
                 context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
                 for i in range(0, 10):
                     # place lines for 0-9 percent
@@ -1757,7 +1750,6 @@ class PlotGauge(Gauge):
                 context.stroke()
 
             else: # major (10% step) guides
-                # TODO: set color from self/theme
                 context.set_source_rgba(*self.colors['grid_major'].tuple_rgba())
                 for i in range(0, 110, 10): # 0,10,20..100
                     
@@ -1860,7 +1852,7 @@ class PlotGauge(Gauge):
         for element in set(self.elements): # without set() the same element multiple times leads to multiple same points added every time.
             self.points[element].append(self.monitor.normalize(element))
 
-        super(PlotGauge, self).update(context)
+        super(Plot, self).update(context)
 
 
     def draw(self, context):
@@ -1915,9 +1907,7 @@ class PlotGauge(Gauge):
         self.draw_captions(context)
 
 
-class MirrorPlotGauge(PlotGauge):
-
-    #scale_lock = None # bool, whether to use the same scale for up and down
+class MirrorPlot(Plot):
 
     def __init__(self, app, monitor, scale_lock=True, **kwargs):
 
@@ -1925,9 +1915,10 @@ class MirrorPlotGauge(PlotGauge):
         self.down = kwargs['elements'][1]
         kwargs['elements'] = self.up + self.down
 
-        super(MirrorPlotGauge, self).__init__(app, monitor, **kwargs)
+        super(MirrorPlot, self).__init__(app, monitor, **kwargs)
         self.y_center = self.y + self.height / 2
-        self.scale_lock = scale_lock
+        self.scale_lock = scale_lock # bool, whether to use the same scale for up and down
+
         self.grid_height /= 2
 
         palette_len = max((len(self.up), len(self.down)))
@@ -1949,8 +1940,8 @@ class MirrorPlotGauge(PlotGauge):
 
         if self.scale_lock:
 
-            scale_up = super(MirrorPlotGauge, self).get_scale_factor(self.up)
-            scale_down = super(MirrorPlotGauge, self).get_scale_factor(self.down)
+            scale_up = super(MirrorPlot, self).get_scale_factor(self.up)
+            scale_down = super(MirrorPlot, self).get_scale_factor(self.down)
 
             if (scale_up > 0) and (scale_down > 0): # both values > 0
                 return min((scale_up, scale_down))
@@ -1962,7 +1953,7 @@ class MirrorPlotGauge(PlotGauge):
                 return 0
 
 
-        return super(MirrorPlotGauge, self).get_scale_factor(elements)
+        return super(MirrorPlot, self).get_scale_factor(elements)
 
 
     def draw_grid(self, context, elements=None):
@@ -1976,11 +1967,11 @@ class MirrorPlotGauge(PlotGauge):
 
         if elements == self.up:
             context.translate(0, self.grid_height)
-            super(MirrorPlotGauge, self).draw_grid(context, elements=elements)
+            super(MirrorPlot, self).draw_grid(context, elements=elements)
             context.translate(0, -self.grid_height)
 
         else:
-            super(MirrorPlotGauge, self).draw_grid(context, elements=elements)
+            super(MirrorPlot, self).draw_grid(context, elements=elements)
 
 
     def draw_plot(self, context, points, colors, offset=None):
@@ -1991,7 +1982,7 @@ class MirrorPlotGauge(PlotGauge):
             offset =[x/2 for x in offset]
 
         context.translate(0, -self.inner_height / 2)
-        super(MirrorPlotGauge, self).draw_plot(context, points, colors, offset=offset)
+        super(MirrorPlot, self).draw_plot(context, points, colors, offset=offset)
         context.translate(0, self.inner_height / 2)
 
 
@@ -2010,12 +2001,12 @@ class MirrorPlotGauge(PlotGauge):
 
             self.points[element].append(self.monitor.normalize(element))
 
-        super(PlotGauge, self).update(context) # TRAP: calls parent of parent, not direct parent!
+        super(Plot, self).update(context) # TRAP: calls parent of parent, not direct parent!
 
 
     def draw(self, context):
 
-        # TODO: This is mostly a copy-paste of PlotGauge.update+draw, needs moar DRY.
+        # TODO: This is mostly a copy-paste of Plot.update+draw, needs moar DRY.
 
         self.draw_background(context)
 
@@ -2187,6 +2178,10 @@ class Gulik(object):
 
         for key in DEFAULTS:
             self.config[key] = config_dict.get(key, DEFAULTS[key])
+
+        for key in set(config_dict) - set(DEFAULTS): # iterates through everything defined in config.py we haven't already covered with DEFAULTS
+            if key == key.upper(): # all-caps means it's config
+                self.config[key] = config_dict[key] 
 
         self.window.resize(self.config['WIDTH'], self.config['HEIGHT'])
         self.window.move(self.config['X'], self.config['Y']) # move apparently must be called after show_all
@@ -2374,7 +2369,7 @@ class Gulik(object):
 
         box.place(
             'cpu',
-            ArcGauge,
+            Arc,
             #elements=['aggregate'],
             elements=all_cores,
             width=box.width, 
@@ -2398,17 +2393,11 @@ class Gulik(object):
             ]
         )
 
-        #box.place('cpu', ArcGauge, elements=['core_0'], width=box.width / 4, height=box.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_1'], width=box.width / 4, height=box.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_2'], width=box.width / 4, height=box.width / 4)
-        #box.place('cpu', ArcGauge, elements=['core_3'], width=box.width / 4, height=box.width / 4)
-        box.place('cpu', PlotGauge, elements=all_cores, width=box.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
-        #box.place('cpu', PlotGauge, elements=all_cores, width=box.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='separate', markers=False)#, line=False, grid=False)
-        #box.place('cpu', RectGauge, elements=all_cores, width=box.width, height=50, padding=15, pattern=stripe45, combination='cumulative_force')
+        box.place('cpu', Plot, elements=all_cores, width=box.width, height=100, padding=15, pattern=stripe45, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
 
         box.place(
             'memory',
-            ArcGauge,
+            Arc,
             elements=['other', 'top_3', 'top_2', 'top_1'],
             width=box.width,
             height=box.width,
@@ -2433,10 +2422,10 @@ class Gulik(object):
 
         last_gauge = self.gauges[-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        box.place('memory', MarqueeGauge, text='{top_1.name} ({top_1.private})', width=box.width, height=25, foreground=palette[0]) 
-        box.place('memory', MarqueeGauge, text='{top_2.name} ({top_2.private})', width=box.width, height=25, foreground=palette[1]) 
-        box.place('memory', MarqueeGauge, text='{top_3.name} ({top_3.private})', width=box.width, height=25, foreground=palette[2]) 
-        box.place('memory', MarqueeGauge, text='other({other.private}/{other.count})', width=box.width, height=25, foreground=palette[3]) 
+        box.place('memory', Text, text='{top_1.name} ({top_1.private})', width=box.width, height=25, foreground=palette[0]) 
+        box.place('memory', Text, text='{top_2.name} ({top_2.private})', width=box.width, height=25, foreground=palette[1]) 
+        box.place('memory', Text, text='{top_3.name} ({top_3.private})', width=box.width, height=25, foreground=palette[2]) 
+        box.place('memory', Text, text='other({other.private}/{other.count})', width=box.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -2448,7 +2437,7 @@ class Gulik(object):
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
 
-        box.place('network', MirrorArcGauge, width=box.width, height=box.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
+        box.place('network', MirrorArc, width=box.width, height=box.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
                     #'text': '{em0.all_addrs}',
@@ -2458,7 +2447,7 @@ class Gulik(object):
             ]
         )
 
-        box.place('network', MirrorPlotGauge, width=box.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
+        box.place('network', MirrorPlot, width=box.width, height=100, padding=15, elements=[all_nics_up, all_nics_down], pattern=stripe45, markers=False, combination='cumulative_force')#, scale_lock=False)
 
         alignments = ['left_top', 'center_top','right_top']
         palette = self.gauges[-1].colors_plot_marker
@@ -2466,16 +2455,12 @@ class Gulik(object):
             # build a legend
             color = palette[idx]
             align = alignments[idx % 3] # boom.
-            box.place('network', MarqueeGauge, text=if_name, foreground=color, width=box.width/3, height=25, padding=5, align=align)
+            box.place('network', Text, text=if_name, foreground=color, width=box.width/3, height=25, padding=5, align=align)
 
-        #box.place('network', MarqueeGauge, width=box.width, height=45, padding=15, text='🦆{lo0.counters.bytes_recv} AND SOMETHING TO MAKE IT SCROLL 💡')
-
-        #box.place('network', MirrorPlotGauge, width=box.width, height=100, padding=15, elements=[['aggregate.bytes_sent'], ['aggregate.bytes_recv']], pattern=stripe45, markers=False)#, combination='cumulative_force')
-        
 
         if psutil.sensors_battery() is not None:
 
-            box.place('battery', RectGauge, width=box.width, height=60, padding=15, captions=[
+            box.place('battery', Rect, width=box.width, height=60, padding=15, captions=[
                     {
                         'text': '{state}…',
                         'position': 'left_center',
