@@ -417,21 +417,24 @@ def stripe45(color):
 
 DEFAULTS = {
     'FPS': 1,
-    'COLORS': {
-        'window_background': Color(0,0,0, 0.6),
-        'gauge_background': Color(1,1,1, 0.1),
-        'highlight': Color(0.5, 1, 0, 0.6),
-        'text': Color(1,1,1, 0.6),
-        'text_minor': Color(1,1,1, 0.3)
-    },
-    'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
-    'FONT': 'Orbitron',
-    'FONT_WEIGHT': 'Light',
     'WIDTH': 200,
     'HEIGHT': Gdk.Screen().get_default().get_height(),
     'X': 0,
     'Y': 0,
-    'NETDATA_HOSTS': []
+    'NETDATA_HOSTS': [],
+
+    # styling stuff below this
+
+    'FONT': 'Orbitron',
+    'FONT_WEIGHT': 'Light',
+
+    'COLOR_WINDOW_BACKGROUND': Color(0,0,0, 0.6),
+    'COLOR_GAUGE_BACKGROUND': Color(1,1,1, 0.1),
+    'COLOR_HIGHLIGHT': Color(0.5, 1, 0, 0.6),
+    'COLOR_TEXT': Color(1,1,1, 0.6),
+    'COLOR_TEXT_MINOR': Color(1,1,1, 0.3),
+
+    'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
 }
 
 
@@ -1186,25 +1189,40 @@ class Gauge(object):
         self.colors = {}
 
         if foreground is None:
-            self.colors['foreground'] = self.app.config['COLORS']['highlight']
+            #self.colors['foreground'] = self.app.config['COLORS']['highlight']
+            self.colors['foreground'] = self.get_style('color', 'highlight')
         else:
             self.colors['foreground'] = foreground
 
         if background is None:
-            self.colors['background'] = self.app.config['COLORS']['gauge_background']
+            self.colors['background'] = self.get_style('color', 'gauge_background')
         else:
             self.colors['background'] = background
 
         self.pattern = pattern
-        self.palette = palette or self.app.config['PALETTE'] # function to generate color palettes with
+        self.palette = palette or self.get_style('palette') # function to generate color palettes with
 
         self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
 
-    #def rename_me(self, name):
+    def get_style(self, name, subname=None):
 
-        
+        """
+        load the most specific style setting available given a name and optional subname.
+        usage examples: self.get_style('margin', 'left'), 
+        """
 
+        keys = []
+        if subname:
+            keys.append('_'.join([name, self.__class__.__name__, subname]).upper())
+        keys.append('_'.join([name, self.__class__.__name__]).upper())
+        if subname:
+            keys.append('_'.join([name, subname]).upper())
+        keys.append(name.upper())
+
+        for key in keys:
+            if key in self.app.config:
+                return self.app.config[key]
 
 
     @property
@@ -1286,7 +1304,7 @@ class MarqueeGauge(Gauge):
     def __init__(self, app, monitor, text, speed=25, align=None, **kwargs):
        
         if 'foreground' not in kwargs:
-            kwargs['foreground'] = self.app.config['COLORS']['text']
+            kwargs['foreground'] = self.get_style('color', 'text')
 
         super(MarqueeGauge, self).__init__(app, monitor, **kwargs)
         self.text = text # the text to be rendered, a format string passed to monitor.caption
@@ -1300,7 +1318,7 @@ class MarqueeGauge(Gauge):
 
         surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
         context = cairo.Context(surface)
-        font = Pango.FontDescription('%s %s %d' % (self.app.config['FONT'], self.app.config['FONT_WEIGHT'], 10))
+        font = Pango.FontDescription('%s %s 10' % (self.get_style('font'), self.get_style('font_weight')))
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
         layout.set_text('0', -1) # naively assuming 0 is the highest glyph
@@ -1324,7 +1342,7 @@ class MarqueeGauge(Gauge):
         context.clip()
 
         context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
-        font = Pango.FontDescription('%s %s %d' % (self.app.config['FONT'], self.app.config['FONT_WEIGHT'], self.font_size))
+        font = Pango.FontDescription('%s %s %d' % (self.get_style('font'), self.get_style('font_weight'), self.font_size))
 
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
@@ -2219,7 +2237,7 @@ class Gulik(object):
             align = 'left_top'
         
         if color is None:
-            color = self.config['COLORS']['text']
+            color = self.config['COLOR_TEXT']
         
         context.set_source_rgba(*color.tuple_rgba())
 
@@ -2254,7 +2272,7 @@ class Gulik(object):
         gulik = cairo.ImageSurface.create_from_png(os.path.join(__path__[0], 'gulik.png'))
         context.save()
         context.set_operator(cairo.OPERATOR_SOFT_LIGHT)
-        context.translate(0, self.window.height - 133)
+        context.translate(self.window.width - 200, self.window.height - 133)
         context.set_source_surface(gulik)
         context.rectangle(0, 0, 200, 133)
         context.fill()
@@ -2267,7 +2285,7 @@ class Gulik(object):
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
 
-        context.set_source_rgba(*self.config['COLORS']['window_background'].tuple_rgba())
+        context.set_source_rgba(*self.config['COLOR_WINDOW_BACKGROUND'].tuple_rgba())
         context.rectangle(0, 0, self.window.width, self.window.height)
         context.fill()
 
@@ -2374,7 +2392,7 @@ class Gulik(object):
                     'text': '{count} cores',
                     'position': 'right_bottom',
                     'align': 'right_bottom',
-                    'color': self.config['COLORS']['text_minor'],
+                    'color': self.config['COLOR_TEXT_MINOR'],
                     'font_size': 8
                 }
             ]
@@ -2407,7 +2425,7 @@ class Gulik(object):
                     'text': '{total}',
                     'position': 'left_top',
                     'align': 'left_top',
-                    'color': self.config['COLORS']['text_minor'],
+                    'color': self.config['COLOR_TEXT_MINOR'],
                     'font_size': 8,
                 }
             ]
