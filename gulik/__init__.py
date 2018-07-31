@@ -430,6 +430,7 @@ DEFAULTS = {
 
     'FONT': 'Orbitron',
     'FONT_WEIGHT': 'Light',
+    'FONT_SIZE': 10,
 
     'COLOR_WINDOW_BACKGROUND': Color(0,0,0, 0.6),
     'COLOR_GAUGE_BACKGROUND': Color(1,1,1, 0.1),
@@ -1315,7 +1316,15 @@ class Gauge(object):
 
             caption_text = self.monitor.caption(caption['text'])
 
-            self.app.render_text(context, caption_text, position[0], position[1], align=caption.get('align', None), color=caption.get('color', self.get_style('color', 'text')), font_size=caption.get('font_size', None))
+            self.app.draw_text(
+                context,
+                caption_text,
+                position[0],
+                position[1],
+                align=caption.get('align', None),
+                color=caption.get('color', self.get_style('color', 'text')),
+                font_size=caption.get('font_size', self.get_style('font_size', 'caption'))
+            )
 
             if 'operator' in caption:
                 context.restore()
@@ -1911,7 +1920,7 @@ class Plot(Gauge):
                 text = u"∞X"
             else:
                 text = "%sX" % pretty_si(self.get_scale_factor())
-            self.app.render_text(context, text, self.x + self.padding_left + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=10)
+            self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=self.get_style('font_size', 'scale'))
 
         colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
         colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
@@ -2065,9 +2074,9 @@ class MirrorPlot(Plot):
                     text = "%sX" % pretty_si(self.get_scale_factor(elements))
 
                 if elements == self.up:
-                    self.app.render_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
+                    self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
                 elif not self.scale_lock: # don't show 'down' scalefactor if it's locked
-                    self.app.render_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
+                    self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
             
 
 
@@ -2268,7 +2277,7 @@ class Gulik(object):
         return True # gtk stops executing timeout callbacks if they don't return True
 
 
-    def render_text(self, context, text, x, y, align=None, color=None, font_size=None):
+    def draw_text(self, context, text, x, y, align=None, color=None, font_size=None):
         
         if align is None:
             align = 'left_top'
@@ -2423,14 +2432,11 @@ class Gulik(object):
                     'text': '{aggregate:.1f}%',
                     'position': 'center_center',
                     'align': 'center_center',
-                    'font_size': 14
                 },
                 {
                     'text': '{count} cores',
                     'position': 'right_bottom',
                     'align': 'right_bottom',
-                    'color': self.config['COLOR_TEXT_MINOR'],
-                    'font_size': 8
                 }
             ]
         )
@@ -2456,8 +2462,6 @@ class Gulik(object):
                     'text': '{total}',
                     'position': 'left_top',
                     'align': 'left_top',
-                    'color': self.config['COLOR_TEXT_MINOR'],
-                    'font_size': 8,
                 }
             ]
         )
