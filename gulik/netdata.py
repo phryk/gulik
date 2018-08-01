@@ -20,10 +20,11 @@ class NetdataError(NetdataException):
 
 class Netdata(object):
 
-    def __init__(self, host, port=None):
+    def __init__(self, host, port=None, timeout=None):
 
         self.host = host
         self.port = port or 19999
+        self.timeout = timeout
 
     @property
     def base_url(self):
@@ -42,7 +43,7 @@ class Netdata(object):
                 del(params[k])
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=self.timeout)
             #print(response.url)
             if response.status_code == 200:
                 try:

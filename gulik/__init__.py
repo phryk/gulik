@@ -425,8 +425,9 @@ DEFAULTS = {
 
     # styling stuff below this
 
-    'MARGIN': 0,
+    'MARGIN': 5,
     'PADDING': 5,
+    'PADDING_TEXT': 0, # otherwise text will be tiny
 
     'FONT': 'Orbitron',
     'FONT_WEIGHT': 'Light',
@@ -441,6 +442,8 @@ DEFAULTS = {
     'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
     'PATTERN': stripe45,
 
+    # some gauges look better without pattern by default
+    'PATTERN_RECT': None,
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
 }
@@ -487,10 +490,11 @@ class Window(Gtk.Window):
 
 class Collector(multiprocessing.Process):
 
-    def __init__(self, queue_update, queue_data):
+    def __init__(self, app, queue_update, queue_data):
 
         super(Collector, self).__init__()
         self.daemon = True
+        self.app = app
         self.queue_update = queue_update
         self.queue_data = queue_data
         self.elements = []
@@ -651,10 +655,10 @@ class BatteryCollector(Collector):
 
 class NetdataCollector(Collector):
 
-    def __init__(self, queue_update, queue_data, host, port):
+    def __init__(self, app, queue_update, queue_data, host, port):
 
-        super(NetdataCollector, self).__init__(queue_update, queue_data)
-        self.client = netdata.Netdata(host, port=port)
+        super(NetdataCollector, self).__init__(app, queue_update, queue_data)
+        self.client = netdata.Netdata(host, port=port, timeout=1/self.app.config['FPS'])
 
 
     def run(self):
@@ -698,7 +702,7 @@ class Monitor(threading.Thread):
 
         self.queue_update = multiprocessing.Queue(1)
         self.queue_data = multiprocessing.Queue(1)
-        self.collector = self.collector_type(self.queue_update, self.queue_data)
+        self.collector = self.collector_type(self.app, self.queue_update, self.queue_data)
         self.data = {}
         self.defective = False # for future use, mostly for networked monitors (netdata, mpd, …)
 
@@ -1078,7 +1082,7 @@ class NetdataMonitor(Monitor):
             else:
 
                 try:
-                    (chart, data) = self.queue_data.get(timeout=1)
+                    (chart, data) = self.queue_data.get(timeout=1/self.app.config['FPS'])
                     self.data[chart] = data
 
                     if self.netdata_info['charts'][chart]['units'] != 'percentage':
@@ -1267,12 +1271,12 @@ class Gauge(object):
 
     @property
     def inner_width(self):
-        return self.width - self.padding_left - self.padding_right
+        return self.width - self.margin_left - self.padding_left - self.padding_right - self.margin_right
 
 
     @property
     def inner_height(self):
-        return self.height - self.padding_top - self.padding_bottom
+        return self.height - self.margin_top - self.padding_top - self.padding_bottom - self.margin_bottom
 
 
     def set_brush(self, context, color):
@@ -1288,7 +1292,7 @@ class Gauge(object):
     def draw_background(self, context):
 
         context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.rectangle(self.x + self.padding_left, self.y + self.padding_top, self.inner_width, self.inner_height)
+        context.rectangle(self.x + self.margin_left + self.padding_left, self.y + self.margin_top + self.padding_top, self.inner_width, self.inner_height)
         context.fill()
 
 
@@ -1312,7 +1316,7 @@ class Gauge(object):
             else:
                 position = [0, 0]
 
-            position = [position[0] + self.x + self.padding_left, position[1] + self.y + self.padding_top]
+            position = [position[0] + self.x + self.margin_left, position[1] + self.y + self.margin_top]
 
             caption_text = self.monitor.caption(caption['text'])
 
@@ -1403,7 +1407,7 @@ class Text(Gauge):
             self.direction = 'left'
             self.offset = 0
 
-        x = self.x + self.padding_left + align_offset[0] - self.offset
+        x = self.x + self.margin_left + self.padding_left + align_offset[0] - self.offset
         
         if self.align.startswith('center'):
             x += self.inner_width / 2
@@ -1442,7 +1446,7 @@ class Rect(Gauge):
 
             self.set_brush(context, color)
             
-            context.rectangle(self.x + self.padding_left + self.inner_width * offset, self.y + self.padding_top, self.inner_width * value, self.inner_height)
+            context.rectangle(self.x + self.margin_left + self.padding_left + self.inner_width * offset, self.y + self.margin_top + self.padding_top, self.inner_width * value, self.inner_height)
             context.fill()
 
 
@@ -1489,7 +1493,7 @@ class MirrorRect(Gauge):
 
             self.set_brush(context, color)
             
-            context.rectangle(self.x_center + self.inner_width / 2 * offset, self.y + self.padding_top, self.inner_width / 2 * value, self.inner_height)
+            context.rectangle(self.x_center + self.inner_width / 2 * offset, self.y + self.margin_top + self.padding_top, self.inner_width / 2 * value, self.inner_height)
             context.fill()
 
 
@@ -1497,7 +1501,7 @@ class MirrorRect(Gauge):
 
             self.set_brush(context, color)
             
-            context.rectangle(self.x_center - self.inner_width / 2 * offset - self.inner_width / 2 * value, self.y + self.padding_top, self.inner_width / 2 * value, self.inner_height)
+            context.rectangle(self.x_center - self.inner_width / 2 * offset - self.inner_width / 2 * value, self.y + self.margin_top + self.padding_top, self.inner_width / 2 * value, self.inner_height)
             context.fill()
 
 
@@ -1746,9 +1750,9 @@ class Plot(Gauge):
         context.set_source_rgba(*self.colors['grid_minor'].tuple_rgba())
         #context.set_dash([1,1])
 
-        for x in range(int(self.x + self.padding_left), int(self.x + self.padding_left + self.inner_width), int(self.step)):
-            context.move_to(x, self.y + self.padding_top)
-            context.line_to(x, self.y + self.padding_top + self.grid_height)
+        for x in range(int(self.x + self.margin_left + self.padding_left), int(self.x + self.margin_left + self.padding_left + self.inner_width), int(self.step)):
+            context.move_to(x, self.y + self.margin_top + self.padding_top)
+            context.line_to(x, self.y + self.margin_top + self.padding_top + self.grid_height)
         
         context.stroke()
         
@@ -1757,10 +1761,10 @@ class Plot(Gauge):
             for i in range(0, 110, 10): # 0,10,20..100
                 
                 value = i / 100.0
-                y = self.y + self.padding_top + self.grid_height - self.grid_height * value
+                y = self.y + self.margin_top + self.padding_top + self.grid_height - self.grid_height * value
 
-                context.move_to(self.x + self.padding_left, y)
-                context.line_to(self.x + self.padding_left + self.inner_width, y)
+                context.move_to(self.x + self.margin_left + self.padding_left, y)
+                context.line_to(self.x + self.margin_left + self.padding_left + self.inner_width, y)
 
             context.stroke()
 
@@ -1775,13 +1779,13 @@ class Plot(Gauge):
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 1000.0 * scale_factor
-                    y = self.y + self.padding_top + self.grid_height - self.grid_height * value
+                    y = self.y + self.margin_top + self.padding_top + self.grid_height - self.grid_height * value
 
-                    if y < self.y + self.padding_top:
+                    if y < self.y + self.margin_top + self.padding_top:
                         break # stop the loop if guides would be placed outside the gauge
 
-                    context.move_to(self.x + self.padding_left, y)
-                    context.line_to(self.x + self.padding_left + self.inner_width, y)
+                    context.move_to(self.x + self.margin_left + self.padding_left, y)
+                    context.line_to(self.x + self.margin_left + self.padding_left + self.inner_width, y)
                 
                 context.stroke()
 
@@ -1791,13 +1795,13 @@ class Plot(Gauge):
                 for i in range(0, 10):
                     # place lines for 0-9 percent
                     value = i / 100.0 * scale_factor
-                    y = self.y + self.padding_top + self.grid_height - self.grid_height * value
+                    y = self.y + self.margin_top + self.padding_top + self.grid_height - self.grid_height * value
 
-                    if y < self.y + self.padding_top:
+                    if y < self.y + self.margin_top + self.padding_top:
                         break # stop the loop if guides would be placed outside the gauge
 
-                    context.move_to(self.x + self.padding_left, y)
-                    context.line_to(self.x + self.padding_left + self.inner_width, y)
+                    context.move_to(self.x + self.margin_left + self.padding_left, y)
+                    context.line_to(self.x + self.margin_left + self.padding_left + self.inner_width, y)
                 
                 context.stroke()
 
@@ -1806,13 +1810,13 @@ class Plot(Gauge):
                 for i in range(0, 110, 10): # 0,10,20..100
                     
                     value = i / 100.0 * scale_factor
-                    y = self.y + self.padding_top + self.grid_height - self.grid_height * value
+                    y = self.y + self.margin_top + self.padding_top + self.grid_height - self.grid_height * value
 
-                    if y < self.y + self.padding_top:
+                    if y < self.y + self.margin_top + self.padding_top:
                         break # stop the loop if guides would be placed outside the gauge
 
-                    context.move_to(self.x + self.padding_left, y)
-                    context.line_to(self.x + self.padding_left + self.inner_width, y)
+                    context.move_to(self.x + self.margin_left + self.padding_left, y)
+                    context.line_to(self.x + self.margin_left + self.padding_left + self.inner_width, y)
 
                 context.stroke()
 
@@ -1829,8 +1833,8 @@ class Plot(Gauge):
                 amplitude += offset[idx]
 
             coords.append((
-                self.x + idx * self.step + self.padding_left,
-                self.y + self.padding_top + self.inner_height - (self.inner_height * amplitude)
+                self.x + idx * self.step + self.margin_left + self.padding_left,
+                self.y + self.margin_top + self.padding_top + self.inner_height - (self.inner_height * amplitude)
             ))
       
        
@@ -1855,7 +1859,7 @@ class Plot(Gauge):
             context.set_source_surface(self.pattern(colors['plot_fill']))
             context.get_source().set_extend(cairo.Extend.REPEAT)
             
-            context.move_to(self.x + self.padding_left, self.y + self.padding_top + self.inner_height)
+            context.move_to(self.x + self.margin_left + self.padding_left, self.y + self.margin_top + self.padding_top + self.inner_height)
             for idx, (x, y) in enumerate(coords):
                 context.line_to(x, y)
 
@@ -1869,13 +1873,13 @@ class Plot(Gauge):
 
                     if (amplitude != previous_amplitude or i == len(offset) - 1):
 
-                        offset_x = self.x + self.padding_left + self.inner_width - i * self.step
-                        offset_y = self.y + self.padding_top + self.inner_height - self.inner_height * amplitude
+                        offset_x = self.x + self.margin_left + self.padding_left + self.inner_width - i * self.step
+                        offset_y = self.y + self.margin_top + self.padding_top + self.inner_height - self.inner_height * amplitude
 
                         context.line_to(offset_x, offset_y)
 
             else:
-                context.line_to(x, self.y + self.padding_top + self.inner_height)
+                context.line_to(x, self.y + self.margin_top + self.padding_top + self.inner_height)
 
             context.close_path()
 
@@ -1920,7 +1924,7 @@ class Plot(Gauge):
                 text = u"∞X"
             else:
                 text = "%sX" % pretty_si(self.get_scale_factor())
-            self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=self.get_style('font_size', 'scale'))
+            self.app.draw_text(context, text, self.x + self.margin_left +self.padding_left + self.inner_width, self.y, align='right_top', color=self.colors['caption_scale'], font_size=self.get_style('font_size', 'scale'))
 
         colors_plot_marker = self.palette(self.colors['foreground'], len(self.elements))
         colors_plot_line = self.palette(self.colors['plot_line'], len(self.elements))
@@ -2012,8 +2016,8 @@ class MirrorPlot(Plot):
         context.set_line_width(1)
         context.set_source_rgba(*self.colors['grid_milli'].tuple_rgba())
 
-        context.move_to(self.x + self.padding_left, self.y_center)
-        context.line_to(self.x + self.padding_left + self.inner_width, self.y_center)
+        context.move_to(self.x + self.margin_left + self.padding_left, self.y_center)
+        context.line_to(self.x + self.margin_left + self.padding_left + self.inner_width, self.y_center)
         context.stroke()
 
         if elements == self.up:
@@ -2074,11 +2078,9 @@ class MirrorPlot(Plot):
                     text = "%sX" % pretty_si(self.get_scale_factor(elements))
 
                 if elements == self.up:
-                    self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
+                    self.app.draw_text(context, text, self.x + self.margin_left + self.padding_left + self.inner_width, self.y + self.margin_top + self.padding_top, align='right_bottom', color=self.colors['caption_scale'], font_size=10)
                 elif not self.scale_lock: # don't show 'down' scalefactor if it's locked
-                    self.app.draw_text(context, text, self.x + self.padding_left + self.inner_width, self.y + self.padding_top + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
-            
-
+                    self.app.draw_text(context, text, self.x + self.margin_left + self.padding_left + self.inner_width, self.y + self.margin_top + self.padding_top + self.inner_height, align='right_top', color=self.colors['caption_scale'], font_size=10)
 
             offset = [0.0 for _ in range(0, self.num_points)]
             for idx, element in enumerate(elements):
