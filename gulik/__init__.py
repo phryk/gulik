@@ -308,7 +308,7 @@ def pretty_si(number):
 def pretty_bytes(bytecount):
 
     """
-    Return a human readable representation given a size in bytes.
+    Return a human-readable representation given a size in bytes.
     """
 
     units = ['Byte', 'kbyte', 'Mbyte', 'Gbyte', 'Tbyte']
@@ -326,7 +326,7 @@ def pretty_bytes(bytecount):
 def pretty_bits(bytecount):
 
     """
-    Return a human readable representation in bits given a size in bytes.
+    Return a human-readable representation in bits given a size in bytes.
     """
 
     units = ['bit', 'kbit', 'Mbit', 'Gbit', 'Tbit']
@@ -369,7 +369,7 @@ def alignment_offset(align, size):
 
 
 
-## FILLS ##
+## PATTERNS ##
 def stripe45(color):
 
     surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
@@ -413,8 +413,6 @@ def stripe45(color):
 #            time.sleep(self.interval)
 
 
-# CONFIG: TODO: Move into its own file, obvsly
-
 DEFAULTS = {
     'FPS': 1,
     'WIDTH': 200,
@@ -427,7 +425,6 @@ DEFAULTS = {
 
     'MARGIN': 5,
     'PADDING': 5,
-    'PADDING_TEXT': 0, # otherwise text will be tiny
 
     'FONT': 'Orbitron',
     'FONT_WEIGHT': 'Light',
@@ -436,14 +433,24 @@ DEFAULTS = {
     'COLOR_WINDOW_BACKGROUND': Color(0,0,0, 0.6),
     'COLOR_GAUGE_BACKGROUND': Color(1,1,1, 0.1),
     'COLOR_HIGHLIGHT': Color(0.5, 1, 0, 0.6),
-    'COLOR_TEXT': Color(1,1,1, 0.6),
-    'COLOR_TEXT_MINOR': Color(1,1,1, 0.3),
-
+    'COLOR_CAPTION': Color(1,1,1, 0.6),
+    #'COLOR_CAPTION_MINOR': Color(1,1,1, 0.3),
+        
     'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
     'PATTERN': stripe45,
 
-    # some gauges look better without pattern by default
+    'OPERATOR': cairo.Operator.OVER,
+
+    # class-specific default styles
+    
+    'PADDING_TEXT': 0, # otherwise text will be tiny
+
+    'PADDING_RECT': 0,
+    'FONT_WEIGHT_RECT': 'Bold',
+    #'COLOR_RECT_CAPTION': Color(1,1,1, 1),
     'PATTERN_RECT': None,
+    'OPERATOR_RECT_CAPTION': cairo.Operator.CLEAR,
+
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
 }
@@ -502,8 +509,12 @@ class Collector(multiprocessing.Process):
 
     def terminate(self):
 
-        #self.queue_data.close()
-        os.kill(self.pid, signal.SIGKILL) # Would've done it cleaner, but after half a day of chasing some retarded quantenbug I'm done with this shit. Just nuke the fucking things from orbit.
+        #self.queue_data.close() # closing queues manually actually seems to mess stuff up
+       
+        # Would've done this cleaner, but after half a day of chasing some
+        # retarded quantenbug I'm done with this shit. Just nuke the fucking
+        # things from orbit.
+        os.kill(self.pid, signal.SIGKILL)
         #super(Collector, self).terminate()
 
 
@@ -542,7 +553,9 @@ class CPUCollector(Collector):
             block=True
         )
         
-        time.sleep(0.1) # according to psutil docs, there should at least be 0.1 seconds between calls to cpu_percent without interval
+        # according to psutil docs, there should at least be 0.1 seconds
+        # between calls to cpu_percent without sampling interval
+        time.sleep(0.1) 
 
 
 class MemoryCollector(Collector):
@@ -576,11 +589,13 @@ class MemoryCollector(Collector):
                         
                     try:
                         for mmap in process.memory_maps():
-                            # FIXME: startswith('[') might make this BSD-specific
-                            if  mmap.path.startswith('['): # assuming everything with a real path is "not really in ram", but no clue.
+
+                            # assuming everything with a real path is
+                            # "not really in ram", but no clue.
+                            if  mmap.path.startswith('['): 
                                 private += mmap.private * PAGESIZE
                                 resident += mmap.rss * PAGESIZE
-                                #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: obviously broken, can yield negative values
+                                #shared += (mmap.rss - mmap.private) * PAGESIZE # FIXME: probably broken, can yield negative values
                     except OSError:
                         pass # probably "device not available"
 
@@ -594,7 +609,7 @@ class MemoryCollector(Collector):
                     total_use += private
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                    pass#print("memory_maps failed!", e)
+                    pass# TODO: add counter for processes we can't introspect
 
         info = DotDict({
             'total': vmem.total,
@@ -680,7 +695,8 @@ class NetdataCollector(Collector):
     def update(self, chart):
 
         try:
-            data = self.client.data(chart, points=1, after=-1, options=['absolute']) # get the last second of data condensed to one point
+            # get the last second of data condensed to one point
+            data = self.client.data(chart, points=1, after=-1, options=['absolute'])
         except netdata.NetdataException:
             pass
         else:
@@ -727,13 +743,13 @@ class Monitor(threading.Thread):
 
         #while self.collector.is_alive():
         while not self.seppuku:
-            #data = self.queue_data.get(block=True) # get new data from the collector as soon as it's available
 
             try:
                 self.data = self.queue_data.get(timeout=1)
             except queue.Empty:
-                pass # try again, but give thread the ability to die without waiting on collector indefinitely
-
+                # try again, but give thread the ability to die without
+                # waiting on collector indefinitely
+                continue 
         self.commit_seppuku()
 
 
@@ -834,11 +850,22 @@ class NetworkMonitor(Monitor):
         self.interfaces = collections.OrderedDict()
 
         if self.app.config['FPS'] < 2:
-            deque_len = 2 # we need a minimum of 2 so we can get a difference
+            # we need a minimum of 2 samples so we can compute a difference
+            deque_len = 2 
         else:
-            deque_len = self.app.config['FPS'] # max size equal fps means this holds data of only the last second
+            # max size equal fps means this holds data of only the last second
+            deque_len = self.app.config['FPS']
 
-        keys = ['bytes_sent', 'bytes_recv', 'packets_sent', 'packets_recv', 'errin', 'errout', 'dropin', 'dropout']
+        keys = [
+            'bytes_sent',
+            'bytes_recv',
+            'packets_sent',
+            'packets_recv',
+            'errin',
+            'errout',
+            'dropin',
+            'dropout'
+        ]
 
         for if_name in psutil.net_if_stats().keys():
 
@@ -868,8 +895,10 @@ class NetworkMonitor(Monitor):
             try:
                 self.data = self.queue_data.get(timeout=1)
             except queue.Empty:
-                continue # try again, but give thread the ability to die without waiting on collector indefinitely
-            
+                # try again, but give thread the ability to die
+                # without waiting on collector indefinitely.
+                continue             
+
             aggregates = {}
             for key in self.aggregate['counters']:
                 #self.aggregate['counters'][k] = []
@@ -878,7 +907,9 @@ class NetworkMonitor(Monitor):
             self.aggregate['speed'] = 0
             for if_name, if_data in self.interfaces.items():
 
-                if_has_data = if_name in self.data['counters'] and if_name in self.data['stats'] and if_name in self.data['addrs']
+                if_has_data = if_name in self.data['counters'] and\
+                    if_name in self.data['stats'] and\
+                    if_name in self.data['addrs']
 
                 if if_has_data:
 
@@ -896,8 +927,6 @@ class NetworkMonitor(Monitor):
                         self.interfaces[if_name]['addrs'] = self.data['addrs'][if_name]
                     else:
                         self.interfaces[if_name]['addrs'] = []
-                else:
-                    print("yup, this if just saved our ass<------------------------------------------------")
 
             for key, value in aggregates.items():
                 self.aggregate['counters'][key].append(value)
@@ -908,8 +937,11 @@ class NetworkMonitor(Monitor):
     def count_sec(self, interface, key):
 
         """
-            get a specified count for a given interface as calculated for the last second
-            EXAMPLE: self.count_sec('eth0', 'bytes_sent') will return count of bytes sent in the last second
+            get a specified count for a given interface
+            as calculated for the last second.
+
+            EXAMPLE: self.count_sec('eth0', 'bytes_sent') 
+            (will return count of bytes sent in the last second)
         """
 
         if interface == 'aggregate':
@@ -918,10 +950,11 @@ class NetworkMonitor(Monitor):
             deque = self.interfaces[interface]['counters'][key]
         
         if self.app.config['FPS'] < 2:
-            return (deque[-1] - deque[0]) / self.app.config['FPS'] # fps < 1 means data covers 1/fps seconds
-
+            # fps < 1 means data covers 1/fps seconds
+            return (deque[-1] - deque[0]) / self.app.config['FPS']
         else:
-            return deque[-1] - deque[0] # last (most recent) minus first (oldest) item
+            # last (most recent) minus first (oldest) item
+            return deque[-1] - deque[0]
 
 
     def normalize(self, element=None):
@@ -938,7 +971,9 @@ class NetworkMonitor(Monitor):
 
             return (self.count_sec(if_name, key) * 8) / link_quality
 
-        return 0 # only happens if we have less than 2 datapoints in which case we can't establish used bandwidth
+        # program flow should only arrive here if we have less than 2
+        # datapoints in which case we can't establish used bandwidth.
+        return 0 
 
 
     def caption(self, fmt):
@@ -1203,7 +1238,7 @@ class Gauge(object):
         pattern=None,
         palette=None,
         combination=None,
-        operator=cairo.Operator.OVER
+        operator=None
     ):
 
         self.app = app
@@ -1212,7 +1247,7 @@ class Gauge(object):
         self.y = y
         self.elements = elements if elements is not None else [None]
         self.captions = captions if captions else list()
-        self.operator = operator
+        self.operator = operator or self.get_style('operator')
         
         self.width = width or self.get_style('width')
         self.height = height or self.get_style('height')
@@ -1300,9 +1335,8 @@ class Gauge(object):
 
         for caption in self.captions:
 
-            if 'operator' in caption:
-                context.save()
-                context.set_operator(caption['operator'])
+            context.save()
+            context.set_operator(caption.get('operator', self.get_style('operator', 'caption')))
 
             if 'position' in caption:
 
@@ -1326,12 +1360,12 @@ class Gauge(object):
                 position[0],
                 position[1],
                 align=caption.get('align', None),
-                color=caption.get('color', self.get_style('color', 'text')),
-                font_size=caption.get('font_size', self.get_style('font_size', 'caption'))
+                color=caption.get('color', self.get_style('color', 'caption')),
+                font_size=caption.get('font_size', self.get_style('font_size', 'caption')),
+                font_weight=caption.get('font_weight', self.get_style('font_weight', 'caption'))
             )
 
-            if 'operator' in caption:
-                context.restore()
+            context.restore()
 
     def update(self, context):
 
@@ -1958,7 +1992,6 @@ class Plot(Gauge):
                 for idx, value in enumerate(points):
                     offset[idx] += value
 
-
         self.draw_captions(context)
 
 
@@ -2109,7 +2142,6 @@ class MirrorPlot(Plot):
 
                     for idx, value in enumerate(points):
                         offset[idx] += value
-
 
         self.draw_captions(context)
 
@@ -2279,21 +2311,20 @@ class Gulik(object):
         return True # gtk stops executing timeout callbacks if they don't return True
 
 
-    def draw_text(self, context, text, x, y, align=None, color=None, font_size=None):
+    def draw_text(self, context, text, x, y, align=None, color=None, font_size=None, font_weight=None):
         
         if align is None:
             align = 'left_top'
         
         if color is None:
-            color = self.config['COLOR_TEXT']
+            color = self.config['COLOR_CAPTION']
         
         context.set_source_rgba(*color.tuple_rgba())
 
-        if font_size is None:
-            font_size = 12
+        font_size = font_size or self.config['FONT_SIZE']
+        font_weight = font_weight or self.config['FONT_WEIGHT']
 
-        
-        font = Pango.FontDescription('%s %s %d' % (self.config['FONT'], self.config['FONT_WEIGHT'], font_size))
+        font = Pango.FontDescription('%s %s %d' % (self.config['FONT'], font_weight, font_size))
 
         layout = PangoCairo.create_layout(context)
         layout.set_font_description(font)
@@ -2513,13 +2544,11 @@ class Gulik(object):
                         'text': '{state}…',
                         'position': 'left_center',
                         'align': 'left_center',
-                        'operator': cairo.Operator.OVERLAY,
                     },
                     {
                         'text': '{percent}%',
                         'position': 'right_center',
                         'align': 'right_center',
-                        'operator': cairo.Operator.OVERLAY,
                     },
                 ]
             )
