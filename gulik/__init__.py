@@ -1342,7 +1342,7 @@ class Gauge(object):
 
                 if isinstance(caption['position'], str):
                     # handle alignment-style strings like "center_bottom"
-                    position = [-x for x in alignment_offset(caption['position'], (self.inner_width, self.inner_height))]
+                    position = [-x for x in alignment_offset(caption['position'], (self.width - self.margin_left - self.margin_right, self.height - self.margin_top - self.margin_bottom))]
 
                 else:
                     position = caption['position']
