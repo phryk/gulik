@@ -341,6 +341,17 @@ def pretty_bits(bytecount):
     return "%.2f %s" % (value, unit)
 
 
+def ignore_none(*args):
+
+    """
+    Return the first passed value that isn't None.
+    """
+
+    for arg in args:
+        if not arg is None:
+            return arg
+
+
 def alignment_offset(align, size):
 
     x_align, y_align = align.split('_')
@@ -439,6 +450,8 @@ DEFAULTS = {
     'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
     'PATTERN': stripe45,
 
+    'CAPTION_PLACEMENT': 'padding', # allow captions to be placed within paddings, as opposed to 'inner'
+
     'OPERATOR': cairo.Operator.OVER,
 
     # class-specific default styles
@@ -446,13 +459,16 @@ DEFAULTS = {
     'PADDING_TEXT': 0, # otherwise text will be tiny
 
     'PADDING_RECT': 0,
+    'FONT_SIZE_RECT': 14,
     'FONT_WEIGHT_RECT': 'Bold',
     #'COLOR_RECT_CAPTION': Color(1,1,1, 1),
     'PATTERN_RECT': None,
-    'OPERATOR_RECT_CAPTION': cairo.Operator.CLEAR,
+    'OPERATOR_RECT_CAPTION': cairo.Operator.CLEAR, # cut-out effect because we fucking can.
+    'CAPTION_PLACEMENT_RECT': 'inner', # to get padding around cut-out
 
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
+
 }
 
 
@@ -1233,6 +1249,7 @@ class Gauge(object):
         padding_bottom=None,
         elements=None,
         captions=None,
+        caption_placement=None,
         foreground=None,
         background=None,
         pattern=None,
@@ -1245,44 +1262,36 @@ class Gauge(object):
         self.monitor = monitor
         self.x = x
         self.y = y
-        self.elements = elements if elements is not None else [None]
-        self.captions = captions if captions else list()
-        self.operator = operator or self.get_style('operator')
+        self.elements = ignore_none(elements, [None])
+        self.captions = ignore_none(captions, list())
+        self.caption_placement = ignore_none(caption_placement, self.get_style('caption_placement'))
+        self.operator = ignore_none(operator, self.get_style('operator'))
         
-        self.width = width or self.get_style('width')
-        self.height = height or self.get_style('height')
+        self.width = ignore_none(width, self.get_style('width'))
+        self.height = ignore_none(height, self.get_style('height'))
 
         #self.padding = padding or self.get_style('padding') # remove self.padding
 
-        self.padding_left = padding_left or padding or self.get_style('padding', 'left')
-        self.padding_right = padding_right or padding or self.get_style('padding', 'right')
-        self.padding_top = padding_top or padding or self.get_style('padding', 'top')
-        self.padding_bottom = padding_bottom or padding or self.get_style('padding', 'bottom')
+        self.padding_left = ignore_none(padding_left, padding, self.get_style('padding', 'left'))
+        self.padding_right = ignore_none(padding_right, padding, self.get_style('padding', 'right'))
+        self.padding_top = ignore_none(padding_top, padding, self.get_style('padding', 'top'))
+        self.padding_bottom = ignore_none(padding_bottom, padding, self.get_style('padding', 'bottom'))
         
-        self.margin_left = margin_left or margin or self.get_style('margin', 'left')
-        self.margin_right = margin_right or margin or self.get_style('margin', 'right')
-        self.margin_top = margin_top or margin or self.get_style('margin', 'top')
-        self.margin_bottom = margin_bottom or margin or self.get_style('margin', 'bottom')
+        self.margin_left = ignore_none(margin_left, margin, self.get_style('margin', 'left'))
+        self.margin_right = ignore_none(margin_right, margin, self.get_style('margin', 'right'))
+        self.margin_top = ignore_none(margin_top, margin, self.get_style('margin', 'top'))
+        self.margin_bottom = ignore_none(margin_bottom, margin, self.get_style('margin', 'bottom'))
 
         self.colors = {}
+        self.colors['foreground'] = ignore_none(foreground, self.get_style('color', 'highlight'))
+        self.colors['background'] = ignore_none(background, self.get_style('color', 'gauge_background'))
 
-        if foreground is None:
-            #self.colors['foreground'] = self.app.config['COLORS']['highlight']
-            self.colors['foreground'] = self.get_style('color', 'highlight')
-        else:
-            self.colors['foreground'] = foreground
+        self.pattern = ignore_none(pattern, self.get_style('pattern'))
+        self.palette = ignore_none(palette, self.get_style('palette')) # function to generate color palettes with
 
-        if background is None:
-            self.colors['background'] = self.get_style('color', 'gauge_background')
-        else:
-            self.colors['background'] = background
+        self.combination = ignore_none(combination, 'separate') # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
-        self.pattern = pattern or self.get_style('pattern')
-        self.palette = palette or self.get_style('palette') # function to generate color palettes with
-
-        self.combination = combination or 'separate' # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
-
-        self.monitor.register_elements(elements)
+        self.monitor.register_elements(self.elements)
 
 
     def get_style(self, name, subname=None):
@@ -1305,13 +1314,23 @@ class Gauge(object):
 
 
     @property
+    def padded_width(self):
+        return self.width - self.margin_left - self.margin_right
+
+
+    @property
+    def padded_height(self):
+        return self.height - self.margin_top - self.margin_bottom
+
+
+    @property
     def inner_width(self):
-        return self.width - self.margin_left - self.padding_left - self.padding_right - self.margin_right
+        return self.padded_width - self.padding_left - self.padding_right
 
 
     @property
     def inner_height(self):
-        return self.height - self.margin_top - self.padding_top - self.padding_bottom - self.margin_bottom
+        return self.padded_height - self.padding_top - self.padding_bottom
 
 
     def set_brush(self, context, color):
@@ -1342,15 +1361,22 @@ class Gauge(object):
 
                 if isinstance(caption['position'], str):
                     # handle alignment-style strings like "center_bottom"
-                    position = [-x for x in alignment_offset(caption['position'], (self.width - self.margin_left - self.margin_right, self.height - self.margin_top - self.margin_bottom))]
+
+                    if self.caption_placement == 'inner':
+                        offset = [-x for x in alignment_offset(caption['position'], (self.inner_width, self.inner_height))]
+                    else:
+                        offset = [-x for x in alignment_offset(caption['position'], (self.padded_width, self.padded_height))]
 
                 else:
-                    position = caption['position']
+                    offset = caption['position']
 
             else:
                 position = [0, 0]
 
-            position = [position[0] + self.x + self.margin_left, position[1] + self.y + self.margin_top]
+            if self.caption_placement == 'inner':
+                position = [offset[0] + self.x + self.margin_left + self.padding_left, offset[1] + self.y + self.margin_top + self.padding_top]
+            else:
+                position = [offset[0] + self.x + self.margin_left, offset[1] + self.y + self.margin_top]
 
             caption_text = self.monitor.caption(caption['text'])
 
@@ -1398,9 +1424,7 @@ class Text(Gauge):
 
         self.speed = speed
 
-        if align is None:
-            align = 'left_top'
-        self.align = align
+        self.align = ignore_none(align, 'left_top')
 
         surface = cairo.ImageSurface(cairo.Format.ARGB32, 10, 10)
         context = cairo.Context(surface)
@@ -1480,8 +1504,18 @@ class Rect(Gauge):
 
             self.set_brush(context, color)
             
-            context.rectangle(self.x + self.margin_left + self.padding_left + self.inner_width * offset, self.y + self.margin_top + self.padding_top, self.inner_width * value, self.inner_height)
+            context.rectangle(
+                self.x + self.margin_left + self.padded_width * offset,
+                self.y + self.margin_top,
+                self.padded_width * value,
+                self.padded_height)
+
             context.fill()
+
+
+    def draw_background(self, context):
+
+        self.draw_rect(context, 1, self.colors['background'])
 
 
     def draw(self, context):
@@ -1715,6 +1749,7 @@ class Plot(Gauge):
 
 
     def prepare_points(self):
+
         self.points = collections.OrderedDict()
         for element in self.elements:
             self.points[element] = collections.deque([], self.num_points)
