@@ -442,15 +442,22 @@ DEFAULTS = {
     'FONT_SIZE': 10,
 
     'COLOR_WINDOW_BACKGROUND': Color(0,0,0, 0.6),
-    'COLOR_GAUGE_BACKGROUND': Color(1,1,1, 0.1),
-    'COLOR_HIGHLIGHT': Color(0.5, 1, 0, 0.6),
+    'COLOR_BACKGROUND': Color(1,1,1, 0.1), # background for gauges
+    'COLOR_FOREGROUND': Color(0.5, 1, 0, 0.6),
     'COLOR_CAPTION': Color(1,1,1, 0.6),
     #'COLOR_CAPTION_MINOR': Color(1,1,1, 0.3),
         
     'PALETTE': functools.partial(palette_hue, distance=-120), # mhh, curry…
     'PATTERN': stripe45,
 
-    'CAPTION_PLACEMENT': 'padding', # allow captions to be placed within paddings, as opposed to 'inner'
+    'CAPTION_PLACEMENT': 'inner', # allow captions to be properly centered in the inner region of gauges, as opposed to 'padding'
+    #'CAPTION_PLACEMENT': 'padding', # allow captions to be placed within paddings, as opposed to 'inner'
+
+    'LEGEND': True,
+    'LEGEND_SIZE': 25, # not font size, but height of one legend cell, including margin and padding.
+    'LEGEND_PLACEMENT': 'padding',
+    'LEGEND_MARGIN': 2.5,
+    'LEGEND_PADDING': 2.5,
 
     'OPERATOR': cairo.Operator.OVER,
 
@@ -458,7 +465,6 @@ DEFAULTS = {
     
     'PADDING_TEXT': 0, # otherwise text will be tiny
 
-    'PADDING_RECT': 0,
     'FONT_SIZE_RECT': 14,
     'FONT_WEIGHT_RECT': 'Bold',
     #'COLOR_RECT_CAPTION': Color(1,1,1, 1),
@@ -468,8 +474,8 @@ DEFAULTS = {
 
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
-
 }
+DEFAULTS['COLOR_FOREGROUND_TEXT'] = DEFAULTS['COLOR_CAPTION']
 
 
 ## Stuff I'd much rather do without a huge dependency like gtk ##
@@ -496,8 +502,6 @@ class Window(Gtk.Window):
 
 
     @property
-
-
     def width(self):
 
         return self.get_size()[0]
@@ -639,6 +643,7 @@ class MemoryCollector(Collector):
             info['top_%d' % (i + 1)] = process 
 
         info['other'] = DotDict({
+            'name': 'other',
             'private': 0,
             'shared': 0,
             'count': 0
@@ -725,10 +730,11 @@ class Monitor(threading.Thread):
 
     collector_type = Collector
 
-    def __init__(self, app):
+    def __init__(self, app, component):
 
         super(Monitor, self).__init__()
         self.app = app
+        self.component = component
         self.daemon = True
         self.seppuku = False
 
@@ -778,7 +784,7 @@ class Monitor(threading.Thread):
         self.collector.join()
 
 
-    def normalize(self, element=None):
+    def normalize(self, element):
         raise NotImplementedError("%s.normalize not implemented!" % self.__class__.__name__)
 
 
@@ -790,7 +796,7 @@ class CPUMonitor(Monitor):
 
     collector_type = CPUCollector
 
-    def normalize(self, element=None):
+    def normalize(self, element):
 
         if not self.data:
             return 0
@@ -821,7 +827,7 @@ class MemoryMonitor(Monitor):
 
     collector_type = MemoryCollector
 
-    def normalize(self, element=None):
+    def normalize(self, element):
 
         if not self.data:
             return 0
@@ -845,13 +851,14 @@ class MemoryMonitor(Monitor):
         data['percent'] = self.data['percent']
         
         for k in ['top_1', 'top_2', 'top_3', 'other']:
+
             data[k] = DotDict()
-            if k != 'other':
-                data[k]['name'] = self.data[k]['name']
-            else:
-                data[k]['count'] = self.data[k]['count']
+            data[k]['name'] = self.data[k]['name']
             data[k]['private'] = pretty_bytes(self.data[k]['private'])
             data[k]['shared'] = pretty_bytes(self.data[k]['shared'])
+            if k == 'other':
+                data[k]['count'] = self.data[k]['count']
+
         return fmt.format(**data)
 
 
@@ -859,9 +866,9 @@ class NetworkMonitor(Monitor):
 
     collector_type = NetworkCollector
 
-    def __init__(self, app):
+    def __init__(self, app, component):
 
-        super(NetworkMonitor, self).__init__(app)
+        super(NetworkMonitor, self).__init__(app, component)
 
         self.interfaces = collections.OrderedDict()
 
@@ -973,7 +980,7 @@ class NetworkMonitor(Monitor):
             return deque[-1] - deque[0]
 
 
-    def normalize(self, element=None):
+    def normalize(self, element):
 
         if_name, key = element.split('.')
 
@@ -1038,7 +1045,9 @@ class BatteryMonitor(Monitor):
 
     collector_type = BatteryCollector
 
-    def normalize(self, element=None):
+    def normalize(self, element):
+
+        # TODO: multi-battery support? needs support by psutil…
 
         if not self.data:
             return 0
@@ -1067,11 +1076,11 @@ class NetdataMonitor(Monitor):
 
     collector_type = NetdataCollector
 
-    def __init__(self, app, host, port):
+    def __init__(self, app, component, host, port):
 
         self.collector_type = functools.partial(self.collector_type, host=host, port=port)
 
-        super(NetdataMonitor, self).__init__(app)
+        super(NetdataMonitor, self).__init__(app, component)
 
         self.charts = set()
         self.normalization_values = {} # keep a table of known maximums because netdata doesn't supply absolute normalization values
@@ -1128,7 +1137,7 @@ class NetdataMonitor(Monitor):
                     self.defective = False
                 except netdata.NetdataException as e:
                     print("Failed, will retry on next frame.")
-                    sleep(1/self.config['FPS'])
+                    time.sleep(1/self.app.config['FPS'])
 
             else:
 
@@ -1155,7 +1164,7 @@ class NetdataMonitor(Monitor):
                 self.queue_update.put(f"UPDATE {chart}", block=True)
 
 
-    def normalize(self, element=None):
+    def normalize(self, element):
 
         parts = element.split('.')
 
@@ -1250,6 +1259,20 @@ class Gauge(object):
         elements=None,
         captions=None,
         caption_placement=None,
+        legend=None,
+        legend_format=None,
+        legend_size=None,
+        legend_placement=None,
+        legend_margin=None,
+        legend_margin_left=None,
+        legend_margin_right=None,
+        legend_margin_top=None,
+        legend_margin_bottom=None,
+        legend_padding=None,
+        legend_padding_left=None,
+        legend_padding_right=None,
+        legend_padding_top=None,
+        legend_padding_bottom=None,
         foreground=None,
         background=None,
         pattern=None,
@@ -1262,36 +1285,105 @@ class Gauge(object):
         self.monitor = monitor
         self.x = x
         self.y = y
-        self.elements = ignore_none(elements, [None])
+        self.elements = ignore_none(elements, [])
         self.captions = ignore_none(captions, list())
         self.caption_placement = ignore_none(caption_placement, self.get_style('caption_placement'))
+
+        self.legend = ignore_none(legend, self.get_style('legend'))
+        self.legend_format = legend_format
+        self.legend_placement = ignore_none(legend_placement, self.get_style('legend_placement'))
+        self.legend_size= ignore_none(legend_size, self.get_style('legend_size'))
+        self.legend_margin_left = ignore_none(legend_margin_left, legend_margin, self.get_style('legend_margin', 'left'))
+        self.legend_margin_right = ignore_none(legend_margin_right, legend_margin, self.get_style('legend_margin', 'right'))
+        self.legend_margin_top = ignore_none(legend_margin_top, legend_margin, self.get_style('legend_margin', 'top'))
+        self.legend_margin_bottom = ignore_none(legend_margin_bottom, legend_margin, self.get_style('legend_margin', 'bottom'))
+        self.legend_padding_left = ignore_none(legend_padding_left, legend_padding, self.get_style('legend_padding', 'left'))
+        self.legend_padding_right = ignore_none(legend_padding_right, legend_padding, self.get_style('legend_padding', 'right'))
+        self.legend_padding_top = ignore_none(legend_padding_top, legend_padding, self.get_style('legend_padding', 'top'))
+        self.legend_padding_bottom = ignore_none(legend_padding_bottom, legend_padding, self.get_style('legend_padding', 'bottom'))
+        
         self.operator = ignore_none(operator, self.get_style('operator'))
         
         self.width = ignore_none(width, self.get_style('width'))
         self.height = ignore_none(height, self.get_style('height'))
-
-        #self.padding = padding or self.get_style('padding') # remove self.padding
-
-        self.padding_left = ignore_none(padding_left, padding, self.get_style('padding', 'left'))
-        self.padding_right = ignore_none(padding_right, padding, self.get_style('padding', 'right'))
-        self.padding_top = ignore_none(padding_top, padding, self.get_style('padding', 'top'))
-        self.padding_bottom = ignore_none(padding_bottom, padding, self.get_style('padding', 'bottom'))
         
         self.margin_left = ignore_none(margin_left, margin, self.get_style('margin', 'left'))
         self.margin_right = ignore_none(margin_right, margin, self.get_style('margin', 'right'))
         self.margin_top = ignore_none(margin_top, margin, self.get_style('margin', 'top'))
         self.margin_bottom = ignore_none(margin_bottom, margin, self.get_style('margin', 'bottom'))
 
+        self.padding_left = ignore_none(padding_left, padding, self.get_style('padding', 'left'))
+        self.padding_right = ignore_none(padding_right, padding, self.get_style('padding', 'right'))
+        self.padding_top = ignore_none(padding_top, padding, self.get_style('padding', 'top'))
+        self.padding_bottom = ignore_none(padding_bottom, padding, self.get_style('padding', 'bottom'))
+        
         self.colors = {}
-        self.colors['foreground'] = ignore_none(foreground, self.get_style('color', 'highlight'))
-        self.colors['background'] = ignore_none(background, self.get_style('color', 'gauge_background'))
+        self.colors['foreground'] = ignore_none(foreground, self.get_style('color', 'foreground'))
+        self.colors['background'] = ignore_none(background, self.get_style('color', 'background'))
 
         self.pattern = ignore_none(pattern, self.get_style('pattern'))
         self.palette = ignore_none(palette, self.get_style('palette')) # function to generate color palettes with
 
         self.combination = ignore_none(combination, 'separate') # combination mode when handling multiple elements. 'separate', 'cumulative' or 'cumulative_force'. cumulative assumes all values add up to max 1.0, while separate assumes every value can reach 1.0 and divides all values by the number of elements handled
 
+        assert self.inner_width > 0, f"margin and padding too big, implying negative inner width for {self.__class__.__name__}/{self.monitor.component}/{self.elements}"
+
+        assert self.inner_height > 0, f"margin and padding too big, implying negative inner height for {self.__class__.__name__}/{self.monitor.component}/{self.elements}"
+
+
         self.monitor.register_elements(self.elements)
+
+        if self.legend:
+
+            legend_x = self.x + self.margin_left + self.padding_left
+            legend_y = self.y + self.margin_top + self.padding_top
+            if self.legend_placement == 'inner':
+                legend_height = self.inner_height
+            else: # 'padding'
+                legend_y += self.inner_height
+                legend_height = self.padding_bottom
+
+            rownum = legend_height // self.legend_size
+
+            if rownum < 1:
+                print(f"Can't add autolegend to {self.__class__.__name__}/{self.monitor.component} because of insufficient space: {legend_height}px")
+            else:
+
+
+                colnum = math.ceil(len(self.elements) // rownum) or 1
+                cell_width = self.inner_width // colnum
+
+                colors = self.palette(self.colors['foreground'], len(self.elements))
+
+                box = self.app.box(legend_x, legend_y, self.inner_width, legend_height)
+
+                for idx, element in enumerate(self.elements):
+
+                    if self.legend_format:
+                        text = self.legend_format.format(**{'element': element})
+                    else:
+                        text = element
+                        #text = element.split('.')[0]
+
+                    box.place(
+                        self.monitor.component,
+                        Text,
+                        text=text,
+                        align='center_center',
+                        foreground=colors[idx],
+                        background=Color(0,0,0, 0),
+                        width=cell_width,
+                        height=self.legend_size,
+                        margin_left=self.legend_margin_left,
+                        margin_right=self.legend_margin_right,
+                        margin_top=self.legend_margin_top,
+                        margin_bottom=self.legend_margin_bottom,
+                        padding_left=self.legend_padding_left,
+                        padding_right=self.legend_padding_right,
+                        padding_top=self.legend_padding_top,
+                        padding_bottom=self.legend_padding_bottom,
+                        legend=False
+                    )
 
 
     def get_style(self, name, subname=None):
@@ -1308,6 +1400,7 @@ class Gauge(object):
         if subname:
             keys.append('_'.join([name, subname]).upper())
         keys.append(name.upper())
+
         for key in keys:
             if key in self.app.config:
                 return self.app.config[key]
@@ -1346,7 +1439,7 @@ class Gauge(object):
     def draw_background(self, context):
 
         context.set_source_rgba(*self.colors['background'].tuple_rgba())
-        context.rectangle(self.x + self.margin_left + self.padding_left, self.y + self.margin_top + self.padding_top, self.inner_width, self.inner_height)
+        context.rectangle(self.x + self.margin_left+ self.padding_left, self.y + self.margin_top + self.padding_top, self.inner_width, self.inner_height)
         context.fill()
 
 
@@ -1393,6 +1486,7 @@ class Gauge(object):
 
             context.restore()
 
+
     def update(self, context):
 
         """
@@ -1415,9 +1509,6 @@ class Text(Gauge):
 
     def __init__(self, app, monitor, text, speed=25, align=None, **kwargs):
        
-        if 'foreground' not in kwargs:
-            kwargs['foreground'] = self.get_style('color', 'text')
-
         super(Text, self).__init__(app, monitor, **kwargs)
         self.text = text # the text to be rendered, a format string passed to monitor.caption
         self.previous_text = '' # to be able to detect change
@@ -1436,18 +1527,28 @@ class Text(Gauge):
         if size[1] > 10:
             self.font_size = self.inner_height * 10/size[1]
         else:
-            self.font_size = self.inner_height
+            self.font_size = self.inner_height # probably not gonna happen
+
         self.direction = 'left'
         self.offset = 0.0
         self.step = speed / self.app.config['FPS'] # i.e. speed in pixel/s
+
+
+    def draw_background(self, context):
+
+        context.set_source_rgba(*self.colors['background'].tuple_rgba())
+        context.rectangle(self.x + self.margin_left, self.y + self.margin_top, self.padded_width, self.padded_height)
+        context.fill()
 
 
     def draw(self, context):
         
         text = self.monitor.caption(self.text)
 
+        self.draw_background(context)
+
         context.save()
-        context.rectangle(self.x, self.y, self.width, self.height)
+        context.rectangle(self.x + self.margin_left + self.padding_left, self.y + self.margin_top + self.padding_top, self.inner_width, self.inner_height)
         context.clip()
 
         context.set_source_rgba(*self.colors['foreground'].tuple_rgba())
@@ -1459,6 +1560,8 @@ class Text(Gauge):
         
         size = layout.get_pixel_size()
         align_offset = alignment_offset(self.align, size) # needed for the specified text alignment
+        #align_offset = [sum(x) for x in zip(alignment_offset(self.align, size), alignment_offset(self.align, [self.inner_width, self.inner_height]))] # needed for the specified text alignment
+
         max_offset = size[0] - self.inner_width # biggest needed offset for marquee, can be negative if all text fits
 
         if max_offset <= 0 or text != self.previous_text:
@@ -1474,7 +1577,13 @@ class Text(Gauge):
             x += self.inner_width
 
 
-        y = self.y + align_offset[1]
+        y = self.y + self.margin_top + self.padding_top + align_offset[1]
+
+        if self.align.endswith('center'):
+            y += self.inner_height / 2
+
+        elif self.align.endswith('bottom'):
+            y += self.inner_height
 
         context.translate(x, y)
 
@@ -1503,7 +1612,7 @@ class Rect(Gauge):
     def draw_rect(self, context, value, color, offset=0.0):
 
             self.set_brush(context, color)
-            
+
             context.rectangle(
                 self.x + self.margin_left + self.padded_width * offset,
                 self.y + self.margin_top,
@@ -1552,7 +1661,7 @@ class MirrorRect(Gauge):
         self.right = kwargs['elements'][1]
         kwargs['elements'] = self.left + self.right
         super(MirrorRect, self).__init__(app, monitor, **kwargs)
-        self.x_center = self.x + self.width / 2
+        self.x_center = self.x + self.margin_left + (self.inner_width / 2)
         self.draw_left = self.draw_rect_negative
         self.draw_right = self.draw_rect
 
@@ -1609,9 +1718,9 @@ class Arc(Gauge):
         super(Arc, self).__init__(app, monitor, **kwargs)
         self.stroke_width = stroke_width
         #self.radius = (min(self.width, self.height) / 2) - (2 * self.padding) - (self.stroke_width / 2)
-        self.radius = (min(self.inner_width, self.inner_height) / 2) - (self.stroke_width / 2)
-        self.x_center = self.x + self.width / 2
-        self.y_center = self.y + self.height / 2
+        self.radius = (min(self.inner_width, self.inner_height) / 2) - self.stroke_width 
+        self.x_center = self.x + self.margin_left + self.padding_left + (self.inner_width / 2)
+        self.y_center = self.y + self.margin_top + self.padding_top + (self.inner_height / 2)
 
 
     def draw_arc(self, context, value, color, offset=0.0):
@@ -2039,7 +2148,7 @@ class MirrorPlot(Plot):
         kwargs['elements'] = self.up + self.down
 
         super(MirrorPlot, self).__init__(app, monitor, **kwargs)
-        self.y_center = self.y + self.height / 2
+        self.y_center = self.y + self.margin_top + self.padding_top + (self.inner_height / 2)
         self.scale_lock = scale_lock # bool, whether to use the same scale for up and down
 
         self.grid_height /= 2
@@ -2202,7 +2311,7 @@ class Box(object):
 
 
     def place(self, component, cls, **kwargs):
-
+    
         width = kwargs.get('width', None)
         height = kwargs.get('height', None)
 
@@ -2219,19 +2328,18 @@ class Box(object):
             height = self.height - self._last_bottom
 
         if self._last_right + width > self.width: # move to next "row"
-            x = self.x # 0 left offset
-            y = self.y + self._last_bottom
+            x = 0
+            y = self._last_bottom
 
         else:
-            x = self.x + self._last_right
-            y = self.y + self._last_top
+            x = self._last_right
+            y = self._last_top
 
-
-        kwargs['x'] = x
-        kwargs['y'] = y
+        kwargs['x'] = self.x + x
+        kwargs['y'] = self.y + y
         kwargs['width'] = width
         kwargs['height'] = height
-
+        
         self.app.add_gauge(component, cls, **kwargs)
 
         self._last_right = x + width
@@ -2261,7 +2369,7 @@ class Gulik(object):
 
         self.monitors = {}
         self.gauges = []
-        self.boxes = []
+        #self.boxes = []
 
         self.apply_config()
 
@@ -2273,7 +2381,7 @@ class Gulik(object):
 
         self.monitors = {}
         self.gauges = []
-        self.boxes = []
+        #self.boxes = []
 
 
     def apply_config(self):
@@ -2321,7 +2429,8 @@ class Gulik(object):
             else:
                 port = 19999
 
-            self.monitors[f"netdata-{host}"] = NetdataMonitor(self, host, port)
+            component = f"netdata-{host}"
+            self.monitors[component] = NetdataMonitor(self, component, host, port)
 
         # NOTE: psutil-based monitors are autoloaded in add_gauge and thus don't have to be handled here like netdata monitors
 
@@ -2386,7 +2495,7 @@ class Gulik(object):
         gulik = cairo.ImageSurface.create_from_png(os.path.join(__path__[0], 'gulik.png'))
         context.save()
         context.set_operator(cairo.OPERATOR_SOFT_LIGHT)
-        context.translate(self.window.width - 200, self.window.height - 133)
+        context.translate(self.config['WIDTH'] - 200, self.config['HEIGHT'] - 133)
         context.set_source_surface(gulik)
         context.rectangle(0, 0, 200, 133)
         context.fill()
@@ -2400,7 +2509,7 @@ class Gulik(object):
         context.set_operator(cairo.OPERATOR_OVER)
 
         context.set_source_rgba(*self.config['COLOR_WINDOW_BACKGROUND'].tuple_rgba())
-        context.rectangle(0, 0, self.window.width, self.window.height)
+        context.rectangle(0, 0, self.config['WIDTH'], self.config['HEIGHT'])
         context.fill()
 
         self.draw_gulik(context)
@@ -2452,11 +2561,11 @@ class Gulik(object):
 
     def box(self, x=0, y=0, width=None, height=None): 
 
-        width = width if not width is None else self.window.width
-        height = height if not height is None else self.window.height
+        width = ignore_none(width, self.config['WIDTH'] - x)
+        height = ignore_none(height, self.config['HEIGHT'] - y)
 
         box = Box(self, x, y, width, height)
-        self.boxes.append(box)
+        #self.boxes.append(box)
         return box
 
 
@@ -2465,7 +2574,7 @@ class Gulik(object):
         if not component in self.monitors:
             if component in self.monitor_table:
                 print("Autoloading %s!" % self.monitor_table[component].__name__)
-                self.monitors[component] = self.monitor_table[component](self)
+                self.monitors[component] = self.monitor_table[component](self, component)
             elif component.startswith('netdata-'):
                 raise LookupError(f"Unknown netdata host '{component[8:]}'")
             else:
@@ -2495,6 +2604,8 @@ class Gulik(object):
             height=box.width,
             stroke_width=10,
             combination='cumulative_force',
+            legend=False,
+            padding_bottom=5,
             captions=[
                 {
                     'text': '{aggregate:.1f}%',
@@ -2509,16 +2620,29 @@ class Gulik(object):
             ]
         )
 
-        box.place('cpu', Plot, elements=all_cores, width=box.width, height=100, autoscale=True, combination='cumulative_force', markers=False)#, line=False, grid=False)
+        box.place(
+            'cpu',
+            Plot,
+            elements=all_cores,
+            width=box.width,
+            height=130,
+            padding_bottom=50,
+            autoscale=True,
+            combination='cumulative_force',
+            markers=False
+        )
 
         box.place(
             'memory',
             Arc,
             elements=['other', 'top_3', 'top_2', 'top_1'],
             width=box.width,
-            height=box.width,
+            height=box.width + 100,
+            padding_bottom=100, # make space for 4 rows of legend
             stroke_width=30,
             combination='cumulative',
+            #legend_format="{{{element}}}",
+            legend_format="{{{element}.name}} ({{{element}.private}})",
             captions=[
                 {
                     'text': '{percent:.1f}%',
@@ -2536,10 +2660,10 @@ class Gulik(object):
 
         last_gauge = self.gauges[-1]
         palette = [color for color in reversed(last_gauge.palette(last_gauge.colors['foreground'], 4))]
-        box.place('memory', Text, text='{top_1.name} ({top_1.private})', width=box.width, height=25, foreground=palette[0]) 
-        box.place('memory', Text, text='{top_2.name} ({top_2.private})', width=box.width, height=25, foreground=palette[1]) 
-        box.place('memory', Text, text='{top_3.name} ({top_3.private})', width=box.width, height=25, foreground=palette[2]) 
-        box.place('memory', Text, text='other({other.private}/{other.count})', width=box.width, height=25, foreground=palette[3]) 
+        #box.place('memory', Text, text='{top_1.name} ({top_1.private})', width=box.width, height=25, foreground=palette[0]) 
+        #box.place('memory', Text, text='{top_2.name} ({top_2.private})', width=box.width, height=25, foreground=palette[1]) 
+        #box.place('memory', Text, text='{top_3.name} ({top_3.private})', width=box.width, height=25, foreground=palette[2]) 
+        #box.place('memory', Text, text='other({other.private}/{other.count})', width=box.width, height=25, foreground=palette[3]) 
 
         all_nics = [x for x in psutil.net_if_addrs().keys()]
         all_nics_up = ['%s.bytes_sent' % x for x in all_nics]
@@ -2551,7 +2675,15 @@ class Gulik(object):
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
 
-        box.place('network', MirrorArc, width=box.width, height=box.width, elements=[all_nics_up, all_nics_down], combination='cumulative_force', captions=[
+        box.place(
+            'network',
+            MirrorArc,
+            width=box.width,
+            height=box.width,
+            padding_bottom=5,
+            elements=[all_nics_up, all_nics_down],
+            combination='cumulative_force',
+            captions=[
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
                     #'text': '{em0.all_addrs}',
@@ -2561,20 +2693,28 @@ class Gulik(object):
             ]
         )
 
-        box.place('network', MirrorPlot, width=box.width, height=100, elements=[all_nics_up, all_nics_down], markers=False, combination='cumulative_force')#, scale_lock=False)
+        box.place(
+            'network',
+            MirrorPlot,
+            width=box.width,
+            height=130,
+            elements=[all_nics_up, all_nics_down],
+            markers=False,
+            combination='cumulative_force'
+        )
 
-        alignments = ['left_top', 'center_top','right_top']
-        palette = self.gauges[-1].colors_plot_marker
-        for idx, if_name in enumerate(all_nics):
-            # build a legend
-            color = palette[idx]
-            align = alignments[idx % 3] # boom.
-            box.place('network', Text, text=if_name, foreground=color, width=box.width/3, height=25, align=align)
+        #alignments = ['left_top', 'center_top','right_top']
+        #palette = self.gauges[-1].colors_plot_marker
+        #for idx, if_name in enumerate(all_nics):
+        #    # build a legend
+        #    color = palette[idx]
+        #    align = alignments[idx % 3] # boom.
+        #    box.place('network', Text, text=if_name, foreground=color, width=box.width/3, height=25, align=align)
 
 
         if psutil.sensors_battery() is not None:
 
-            box.place('battery', Rect, width=box.width, height=60, captions=[
+            box.place('battery', Rect, width=box.width, height=60, elements=['battery'], captions=[
                     {
                         'text': '{state}…',
                         'position': 'left_center',
