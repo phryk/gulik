@@ -1570,16 +1570,19 @@ class Text(Gauge):
             self.direction = 'left'
             self.offset = 0
 
-        x = self.x + self.margin_left + self.padding_left + align_offset[0] - self.offset
-        
-        if self.align.startswith('center'):
-            x += self.inner_width / 2
+        x = self.x + self.margin_left + self.padding_left - self.offset
+       
+        if max_offset < 0: # only account for horizontal offset when space allows
 
-        elif self.align.startswith('right'):
-            x += self.inner_width
+            x += align_offset[0]
+            if self.align.startswith('center'):
+                x += self.inner_width / 2
+            
+            elif self.align.startswith('right'):
+                x += self.inner_width
 
 
-        y = self.y + self.margin_top + self.padding_top + align_offset[1]
+        y = self.y + self.margin_top + self.padding_top + align_offset[1] # NOTE: does stuff even show up with vertical align != center?
 
         if self.align.endswith('center'):
             y += self.inner_height / 2
