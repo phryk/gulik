@@ -436,6 +436,7 @@ DEFAULTS = {
 
     'MARGIN': 5,
     'PADDING': 5,
+    'PADDING_BOTTOM': 50, # space for 2-rows of autolegend
 
     'FONT': 'Orbitron',
     'FONT_WEIGHT': 'Light',
