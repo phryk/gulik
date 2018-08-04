@@ -24,6 +24,8 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 from . import netdata
 
+Operator = cairo.Operator
+
 PAGESIZE = os.sysconf('SC_PAGESIZE')
 
 ## Helpers ##
@@ -431,6 +433,7 @@ DEFAULTS = {
     'X': 0,
     'Y': 0,
     'NETDATA_HOSTS': [],
+    'NETDATA_RETRY': 5,
 
     # styling stuff below this
 
@@ -460,24 +463,23 @@ DEFAULTS = {
     'LEGEND_MARGIN': 2.5,
     'LEGEND_PADDING': 2.5,
 
-    'OPERATOR': cairo.Operator.OVER,
+    'OPERATOR': Operator.OVER,
 
     # class-specific default styles
     
     'PADDING_TEXT': 0, # otherwise text will be tiny
 
+    'PADDING_RECT': 5,
     'FONT_SIZE_RECT': 14,
     'FONT_WEIGHT_RECT': 'Bold',
     #'COLOR_RECT_CAPTION': Color(1,1,1, 1),
     'PATTERN_RECT': None,
-    'OPERATOR_RECT_CAPTION': cairo.Operator.CLEAR, # cut-out effect because we fucking can.
+    'OPERATOR_RECT_CAPTION': Operator.DIFFERENCE, # grants visibility no matter how much of the rect is filled
     'CAPTION_PLACEMENT_RECT': 'inner', # to get padding around cut-out
 
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
 }
-DEFAULTS['COLOR_FOREGROUND_TEXT'] = DEFAULTS['COLOR_CAPTION']
-
 
 ## Stuff I'd much rather do without a huge dependency like gtk ##
 class Window(Gtk.Window):
@@ -1064,11 +1066,11 @@ class BatteryMonitor(Monitor):
         data = self.data._asdict()
 
         if not data['power_plugged']:
-            data['state'] = 'Draining'
+            data['state'] = 'draining'
         elif data['percent'] == 100:
-            data['state'] = 'Full'
+            data['state'] = 'Ffll'
         else:
-            data['state'] = 'Charging'
+            data['state'] = 'charging'
 
         return fmt.format(**data)
 
@@ -1085,8 +1087,8 @@ class NetdataMonitor(Monitor):
 
         self.charts = set()
         self.normalization_values = {} # keep a table of known maximums because netdata doesn't supply absolute normalization values
-        self.last_updates = {}
-        
+       
+        self.info_last_try = time.time()
         try:
             self.netdata_info = self.collector.client.charts()
         except netdata.NetdataException as e:
@@ -1108,7 +1110,6 @@ class NetdataMonitor(Monitor):
             if not chart in self.charts:
 
                 self.normalization_values[chart] = 0
-                self.last_updates[chart] = 0
 
                 if self.netdata_info:
                     if not chart in self.netdata_info['charts']:
@@ -1120,8 +1121,6 @@ class NetdataMonitor(Monitor):
                     else:
                         self.normalization_values[chart] = 0
 
-                    self.last_updates[chart] = chart_info['last_entry']
-
                 self.charts.add(chart)
 
     
@@ -1130,39 +1129,42 @@ class NetdataMonitor(Monitor):
         #while self.collector.is_alive():
         while not self.seppuku:
 
-            if self.defective:
+            try:
+                (chart, data) = self.queue_data.get(timeout=1/self.app.config['FPS'])
+                self.data[chart] = data
 
-                print(f"{self.__class__.__name__} instance currently defective, trying to get netdata overview from remote host.")
-                try:
-                    self.netdata_info = self.collector.client.charts()
-                    self.defective = False
-                except netdata.NetdataException as e:
-                    print("Failed, will retry on next frame.")
-                    time.sleep(1/self.app.config['FPS'])
+                if self.netdata_info['charts'][chart]['units'] != 'percentage':
 
-            else:
+                    cumulative_value = sum(data['data'][0][1:])
+                    if self.normalization_values[chart] < cumulative_value:
+                        self.normalization_values[chart] = cumulative_value
 
-                try:
-                    (chart, data) = self.queue_data.get(timeout=1/self.app.config['FPS'])
-                    self.data[chart] = data
-
-                    if self.netdata_info['charts'][chart]['units'] != 'percentage':
-
-                        cumulative_value = sum(data['data'][0][1:])
-                        if self.normalization_values[chart] < cumulative_value:
-                            self.normalization_values[chart] = cumulative_value
-
-                except queue.Empty:
-                    continue # try again
+            except queue.Empty:
+                continue # try again
 
         self.commit_seppuku()
 
 
     def tick(self):
-        if not self.queue_update.full():
-        #if not self.seppuku: # don't request more updates to collector when we're trying to die
-            for chart in self.charts:
-                self.queue_update.put(f"UPDATE {chart}", block=True)
+
+        if self.defective:
+
+            t = time.time()
+            if t >= self.info_last_try + self.app.config['NETDATA_RETRY']:
+                print(f"{self.__class__.__name__} instance currently defective, trying to get netdata overview from {self.collector.client.host}.")
+                self.info_last_try = t
+                try:
+                    self.netdata_info = self.collector.client.charts()
+                    self.defective = False
+                    self.tick() # do the actual tick (i.e. the else clause)
+                except netdata.NetdataException as e:
+                    print(f"Failed, will retry in {self.app.config['NETDATA_RETRY']} seconds.")
+
+        else:
+            if not self.queue_update.full():
+            #if not self.seppuku: # don't request more updates to collector when we're trying to die
+                for chart in self.charts:
+                    self.queue_update.put(f"UPDATE {chart}", block=True)
 
 
     def normalize(self, element):
@@ -1173,7 +1175,7 @@ class NetdataMonitor(Monitor):
 
         #if chart not in self.charts or not self.data[chart]:
         if not chart in self.data:
-            print(f"No data for {chart}")
+            #print(f"No data for {chart}")
             return 0 #
 
         #timestamp = self.data[chart]['data'][0][0] # first element of a netdata datapoint is always time
@@ -1185,7 +1187,6 @@ class NetdataMonitor(Monitor):
 
         if value >= self.normalization_values[chart]:
             self.normalization_values[chart] = value
-
 
         if self.normalization_values[chart] == 0:
             return 0
@@ -1465,7 +1466,7 @@ class Gauge(object):
                     offset = caption['position']
 
             else:
-                position = [0, 0]
+                offset = [0, 0]
 
             if self.caption_placement == 'inner':
                 position = [offset[0] + self.x + self.margin_left + self.padding_left, offset[1] + self.y + self.margin_top + self.padding_top]
@@ -2360,6 +2361,9 @@ class Gulik(object):
 
     def __init__(self, configpath):
 
+        self.started = False
+        self.will_to_live = True # only needed because of gtk
+
         self.screen = Gdk.Screen.get_default()
         self.window = Window()
         self.window.connect('draw', self.draw)
@@ -2374,9 +2378,9 @@ class Gulik(object):
 
         self.apply_config()
 
-
     def reset(self):
 
+        # clear out any existing gauges and monitors
         for monitor in self.monitors.values(): # kill any existing monitors
             monitor.seppuku = True
 
@@ -2385,42 +2389,24 @@ class Gulik(object):
         #self.boxes = []
 
 
-    def apply_config(self):
+    def module_to_config(self, locals):
 
-        print(f"Trying to load config from {self.configpath}…")
-
-        self.config = {}
-        config_dict = {}
-        try:
-            fd = open(self.configpath, mode='r')
-            config_string = fd.read()
-        except OSError as e:
-            print("No config at '%s' or insufficient permissions to read it. Falling back to defaults…" % self.configpath)
-
-        else:
-            try:
-                exec(config_string, config_dict)
-            except Exception as e:
-                print("Error in '%s': %s" % (self.configpath, e))
-                print("Falling back to defaults…")
-                config_dict = DEFAULTS # because config_dict might be contaminated by half-done exec
+        config = {}
 
         for key in DEFAULTS:
-            self.config[key] = config_dict.get(key, DEFAULTS[key])
+            config[key] = locals.get(key, DEFAULTS[key])
 
-        for key in set(config_dict) - set(DEFAULTS): # iterates through everything defined in config.py we haven't already covered with DEFAULTS
+        for key in set(locals) - set(DEFAULTS): # iterates through everything defined in config.py we haven't already covered with DEFAULTS
             if key == key.upper(): # all-caps means it's config
-                self.config[key] = config_dict[key] 
+                config[key] = locals[key]
 
-        self.window.resize(self.config['WIDTH'], self.config['HEIGHT'])
-        self.window.move(self.config['X'], self.config['Y']) # move apparently must be called after show_all
+        if not 'COLOR_FOREGROUND_TEXT' in config:
+            config['COLOR_FOREGROUND_TEXT'] = config['COLOR_CAPTION']
 
-        if 'setup' in config_dict:
-            self.setup = functools.partial(config_dict['setup'], app=self)
-        else:
-            self.setup = self.autosetup
+        return config
 
-        self.reset() # clears out any existing gauges and monitors
+
+    def add_netdata_monitors(self):
 
         # create monitors for all netdata hosts
         for host in self.config['NETDATA_HOSTS']:
@@ -2433,11 +2419,101 @@ class Gulik(object):
             component = f"netdata-{host}"
             self.monitors[component] = NetdataMonitor(self, component, host, port)
 
+
+    def resize_and_move(self):
+
+        self.window.resize(self.config['WIDTH'], self.config['HEIGHT'])
+        self.window.move(self.config['X'], self.config['Y']) # move apparently must be called after show_all
+
+
+    def apply_config(self):
+
+        print(f"Trying to load config from {self.configpath}…")
+
+        custom = False # whether gulik is using a custom configuration
+        old_config = self.config
+        old_setup = self.setup
+
+        self.config = {}
+        try:
+            fd = open(self.configpath, mode='r')
+            config_string = fd.read()
+        except OSError as e:
+            print("No config at '%s' or insufficient permissions to read it. Falling back to defaults…" % self.configpath)
+            config_locals = DEFAULTS
+
+        else:
+            try:
+                config_locals = {}
+                exec(config_string, config_locals)
+                custom = True
+            except Exception as e:
+                print("Error in '%s': %s" % (self.configpath, e))
+                print("Falling back to defaults…")
+                config_locals = DEFAULTS
+
+        self.config = self.module_to_config(config_locals)
+        self.resize_and_move()
+
+        if 'setup' in config_locals:
+            self.setup = functools.partial(config_locals['setup'], app=self)
+        else:
+            self.setup = self.autosetup
+
+        self.reset()
+
+        self.add_netdata_monitors()
+
+
         # NOTE: psutil-based monitors are autoloaded in add_gauge and thus don't have to be handled here like netdata monitors
 
         # finally, run the actual setup function to place all gauges
-        self.setup()
-        print("Done.")
+        try:
+            self.setup()
+            print("Done.")
+
+        except Exception as e:
+
+            # Hokay, so I *think* this catches all failure scenarios for config (re)loads…
+            
+            if not custom:
+                print("Sorry, friend. The autosetup seems to be broken on your machine. You might want to file a bug report.")
+                print("Alternatively, you can create a custom-fit configuration at ~/.config/gulik/config.py.")
+                self.stop()
+                return
+
+            else:
+
+                if isinstance(self.setup, functools.partial):
+                    name = self.setup.func.__name__
+                else:
+                    name = self.setup.__name__
+                print(f"Your custom 'setup' function failed - {type(e).__name__}: {e}")
+
+                print("Falling back to previous configuration")
+                self.monitors = {}
+                self.gauges = []
+                self.config = old_config or self.module_to_config(DEFAULTS) # DEFAULTS if config was empty before (happens on first time this function is called on a Gulik object
+                self.setup = old_setup
+                self.resize_and_move()
+                self.add_netdata_monitors()
+
+                try:
+                    self.setup()
+                except Exception as e:
+                    print("Previous setup failed, too. Reverting to autosetup.")
+                    self.monitors = {}
+                    self.gauges = []
+                    self.config = self.module_to_config(DEFAULTS)
+                    self.setup = self.autosetup
+                    self.resize_and_move()
+                    self.add_netdata_monitors()
+                    try:
+                        self.setup()
+                    except Exception as e:
+                        print("Well, this should never happen.")
+                        print(e)
+                        self.stop()
 
 
     def signal_reload(self, *_):
@@ -2453,7 +2529,7 @@ class Gulik(object):
         for monitor in self.monitors.values():
             monitor.tick()
         self.window.queue_draw()
-        return True # gtk stops executing timeout callbacks if they don't return True
+        return self.will_to_live # gtk stops executing timeout callbacks if they don't return True
 
 
     def draw_text(self, context, text, x, y, align=None, color=None, font_size=None, font_weight=None):
@@ -2532,13 +2608,15 @@ class Gulik(object):
         signal.signal(signal.SIGUSR1, self.signal_reload) # reload config on user-defined signal. (no, not HUP)
         GLib.timeout_add(1000/self.config['FPS'], self.tick)
         self.tick() # first tick without delay so we get output asap
-        Gtk.main()
+        self.started = True
+        Gtk.main() # blocks until Gtk.main.quit is called
         print("\nThank you for flying with phryk evil mad sciences, LLC. Please come again.")
 
 
-    def stop(self, num, frame):
+    def stop(self, num=None, frame=None):
 
         spinner = '▏▎▍▌▋▊▉▉▊▋▌▍▎'
+        self.will_to_live = False # will stop calls by gtk main loop to self.tick
 
         for monitor in self.monitors.values():
             monitor.seppuku = True
@@ -2557,7 +2635,10 @@ class Gulik(object):
             #sys.stdout.write("\rn")
             #sys.stdout.flush()
 
-        Gtk.main_quit()
+        if self.started: # Gtk.main.quit throws an error if called when not started
+            Gtk.main_quit()
+        else:
+            exit() # to actually quit the program before Gtk.main is running
 
 
     def box(self, x=0, y=0, width=None, height=None): 
@@ -2717,14 +2798,18 @@ class Gulik(object):
 
             box.place('battery', Rect, width=box.width, height=60, elements=['battery'], captions=[
                     {
-                        'text': '{state}…',
+                        'text': '{percent}%',
                         'position': 'left_center',
                         'align': 'left_center',
+                        'color': self.config['COLOR_FOREGROUND'],
+                        'operator': Operator.DIFFERENCE, # fake cut-out effect, can break with custom configs
                     },
                     {
-                        'text': '{percent}%',
+                        'text': '{state}',
                         'position': 'right_center',
                         'align': 'right_center',
+                        'color': self.config['COLOR_FOREGROUND'],
+                        'operator': Operator.DIFFERENCE,
                     },
                 ]
             )
