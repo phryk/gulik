@@ -439,7 +439,7 @@ DEFAULTS = {
 
     'MARGIN': 5,
     'PADDING': 5,
-    'PADDING_BOTTOM': 50, # space for 2-rows of autolegend
+    'PADDING_BOTTOM': 40, # space for 2-rows of autolegend
 
     'FONT': 'Orbitron',
     'FONT_WEIGHT': 'Light',
@@ -458,10 +458,12 @@ DEFAULTS = {
     #'CAPTION_PLACEMENT': 'padding', # allow captions to be placed within paddings, as opposed to 'inner'
 
     'LEGEND': True,
-    'LEGEND_SIZE': 25, # not font size, but height of one legend cell, including margin and padding.
+    'LEGEND_ORDER': 'normal', # other valid value: 'reverse'
+    'LEGEND_SIZE': 20, # not font size, but height of one legend cell, including margin and padding.
     'LEGEND_PLACEMENT': 'padding',
     'LEGEND_MARGIN': 2.5,
-    'LEGEND_PADDING': 2.5,
+    #'LEGEND_PADDING': 2.5,
+    'LEGEND_PADDING': 0,
 
     'OPERATOR': Operator.OVER,
 
@@ -1262,6 +1264,7 @@ class Gauge(object):
         captions=None,
         caption_placement=None,
         legend=None,
+        legend_order=None,
         legend_format=None,
         legend_size=None,
         legend_placement=None,
@@ -1292,6 +1295,7 @@ class Gauge(object):
         self.caption_placement = ignore_none(caption_placement, self.get_style('caption_placement'))
 
         self.legend = ignore_none(legend, self.get_style('legend'))
+        self.legend_order = ignore_none(legend_order, self.get_style('legend_order'))
         self.legend_format = legend_format
         self.legend_placement = ignore_none(legend_placement, self.get_style('legend_placement'))
         self.legend_size= ignore_none(legend_size, self.get_style('legend_size'))
@@ -1351,28 +1355,33 @@ class Gauge(object):
                 print(f"Can't add autolegend to {self.__class__.__name__}/{self.monitor.component} because of insufficient space: {legend_height}px")
             else:
 
-
                 colnum = math.ceil(len(self.elements) // rownum) or 1
                 cell_width = self.inner_width // colnum
 
-                colors = self.palette(self.colors['foreground'], len(self.elements))
+                #colors = self.palette(self.colors['foreground'], len(self.elements))
 
                 box = self.app.box(legend_x, legend_y, self.inner_width, legend_height)
 
-                for idx, element in enumerate(self.elements):
+                legend_info = self.legend_info()
 
+                if self.legend_order == 'reverse':
+                    iterator = reversed(legend_info)
+                else:
+                    iterator = legend_info
+
+                #for element in legend_elements:
+                for element in iterator:
+
+                    color, text = legend_info[element]
                     if self.legend_format:
                         text = self.legend_format.format(**{'element': element})
-                    else:
-                        text = element
-                        #text = element.split('.')[0]
 
                     box.place(
                         self.monitor.component,
                         Text,
                         text=text,
                         align='center_center',
-                        foreground=colors[idx],
+                        foreground=color,
                         background=Color(0,0,0, 0),
                         width=cell_width,
                         height=self.legend_size,
@@ -1408,6 +1417,21 @@ class Gauge(object):
                 return self.app.config[key]
 
 
+    def legend_info(self):
+
+        """ defines colors for legend elements """
+
+        data = collections.OrderedDict()
+        
+        colors = self.palette(self.colors['foreground'], len(self.elements))
+        for idx, color in enumerate(colors):
+            element = self.elements[idx]
+            data[element] = (color, element)
+
+        return data
+
+
+
     @property
     def padded_width(self):
         return self.width - self.margin_left - self.margin_right
@@ -1428,7 +1452,7 @@ class Gauge(object):
         return self.padded_height - self.padding_top - self.padding_bottom
 
 
-    def set_brush(self, context, color):
+    def set_brush(self, context, color): # possible TODO: better function name
 
         if self.pattern:
             context.set_source_surface(self.pattern(color))
@@ -1669,6 +1693,21 @@ class MirrorRect(Gauge):
         self.x_center = self.x + self.margin_left + (self.inner_width / 2)
         self.draw_left = self.draw_rect_negative
         self.draw_right = self.draw_rect
+    
+    
+    def legend_info(self):
+
+        """ defines colors for legend elements """
+
+        data = {}
+      
+        colors = self.palette(self.colors['foreground'], max(len(self.left), len(self.right)))
+
+        for elements in (self.left, self.right):
+            for idx, element in enumerate(elements):
+                data[element] = (colors[idx], element)
+
+        return data
 
     
     def draw_rect(self, context, value, color, offset=0.0):
@@ -2164,6 +2203,18 @@ class MirrorPlot(Plot):
         self.colors_plot_fill = self.palette(self.colors['plot_fill'], palette_len)
 
 
+    def legend_info(self):
+
+        data = collections.OrderedDict()
+      
+        colors = self.palette(self.colors['foreground'], max(len(self.up), len(self.down)))
+
+        for elements in (self.up, self.down):
+            for idx, element in enumerate(elements):
+                data[element] = (colors[idx], element)
+
+        return data
+
     def prepare_points(self):
 
         self.points = collections.OrderedDict()
@@ -2514,6 +2565,7 @@ class Gulik(object):
                     try:
                         self.setup()
                     except Exception as e:
+                        raise
                         print("Well, this should never happen.")
                         print(e)
                         self.stop()
@@ -2723,10 +2775,11 @@ class Gulik(object):
             elements=['other', 'top_3', 'top_2', 'top_1'],
             width=box.width,
             height=box.width + 100,
-            padding_bottom=100, # make space for 4 rows of legend
+            padding_bottom=80, # make space for 4 rows of legend
             stroke_width=30,
             combination='cumulative',
             #legend_format="{{{element}}}",
+            legend_order='reverse',
             legend_format="{{{element}.name}} ({{{element}.private}})",
             captions=[
                 {
@@ -2766,6 +2819,7 @@ class Gulik(object):
             width=box.width,
             height=box.width,
             padding_bottom=5,
+            legend=False,
             elements=[all_nics_up, all_nics_down],
             combination='cumulative_force',
             captions=[
