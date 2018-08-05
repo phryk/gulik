@@ -1762,7 +1762,7 @@ class Arc(Gauge):
         super(Arc, self).__init__(app, monitor, **kwargs)
         self.stroke_width = stroke_width
         #self.radius = (min(self.width, self.height) / 2) - (2 * self.padding) - (self.stroke_width / 2)
-        self.radius = (min(self.inner_width, self.inner_height) / 2) - self.stroke_width 
+        self.radius = (min(self.inner_width, self.inner_height) / 2) - self.stroke_width / 2 
         self.x_center = self.x + self.margin_left + self.padding_left + (self.inner_width / 2)
         self.y_center = self.y + self.margin_top + self.padding_top + (self.inner_height / 2)
 
@@ -2744,6 +2744,15 @@ class Gulik(object):
             legend=False,
             padding_bottom=5,
             captions=[
+
+                {
+                    'text': 'CPU',
+                    'position': 'left_top',
+                    'align': 'left_top',
+                    'font_weight': 'Bold',
+                    'operator': Operator.HARD_LIGHT,
+                },
+
                 {
                     'text': '{aggregate:.1f}%',
                     'position': 'center_center',
@@ -2783,6 +2792,13 @@ class Gulik(object):
             legend_format="{{{element}.name}} ({{{element}.private}})",
             captions=[
                 {
+                    'text': 'memory',
+                    'position': 'left_top',
+                    'align': 'left_top',
+                    'font_weight': 'Bold',
+                    'operator': Operator.HARD_LIGHT,
+                },
+                {
                     'text': '{percent:.1f}%',
                     'position': 'center_center',
                     'align': 'center_center'
@@ -2790,8 +2806,8 @@ class Gulik(object):
 
                 {
                     'text': '{total}',
-                    'position': 'left_top',
-                    'align': 'left_top',
+                    'position': 'right_bottom',
+                    'align': 'right_bottom',
                 }
             ]
         )
@@ -2823,6 +2839,13 @@ class Gulik(object):
             elements=[all_nics_up, all_nics_down],
             combination='cumulative_force',
             captions=[
+                {
+                    'text': 'network',
+                    'position': 'left_top',
+                    'align': 'left_top',
+                    'font_weight': 'Bold',
+                    'operator': Operator.HARD_LIGHT,
+                },
                 {
                     'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
                     #'text': '{em0.all_addrs}',
