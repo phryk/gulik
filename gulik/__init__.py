@@ -694,6 +694,32 @@ class BatteryCollector(Collector):
         self.queue_data.put(psutil.sensors_battery(), block=True)
 
 
+class DiskCollector(Collector):
+
+    def update(self):
+
+        data = {}
+
+        partitions = psutil.disk_partitions()
+        io = psutil.disk_io_counters(perdisk=True)
+
+        data['partitions'] = {}
+        for partition in partitions:
+
+            name = partition.device.split('/')[-1]
+
+            data['partitions'][name] = partition._asdict()
+            data['partitions'][name]['name'] = name
+
+            data['partitions'][name]['usage'] = psutil.disk_usage(partition.mountpoint)._asdict()
+
+        data['io'] = {}
+        for disk, info in io.items():
+            data['io'][disk] = info._asdict()
+
+        self.queue_data.put(data, block=True)
+
+
 class NetdataCollector(Collector):
 
     def __init__(self, app, queue_update, queue_data, host, port):
@@ -1075,6 +1101,22 @@ class BatteryMonitor(Monitor):
             data['state'] = 'charging'
 
         return fmt.format(**data)
+
+
+class DiskMonitor(Monitor):
+
+    collector_type = DiskCollector
+
+
+    def normalize(self, element):
+
+        print(self.data)
+        return 0
+
+
+    def caption(self, fmt):
+
+        return fmt
 
 
 class NetdataMonitor(Monitor):
@@ -2409,7 +2451,8 @@ class Gulik(object):
         'cpu': CPUMonitor,
         'memory': MemoryMonitor,
         'network': NetworkMonitor,
-        'battery': BatteryMonitor
+        'battery': BatteryMonitor,
+        'disk': DiskMonitor
     }
 
 
@@ -2828,6 +2871,14 @@ class Gulik(object):
         all_nics_down_errors = ['%s.errin' % x for x in all_nics]
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
+
+        box.place(
+            'disk',
+            Plot,
+            width=box.width,
+            height=130,
+            elements=['ada0'],
+        )
 
         box.place(
             'network',
