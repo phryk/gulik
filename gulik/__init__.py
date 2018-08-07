@@ -696,28 +696,58 @@ class BatteryCollector(Collector):
 
 class DiskCollector(Collector):
 
+    def __init__(self, *args, **kwargs):
+
+        super(DiskCollector, self).__init__(*args, **kwargs)
+        self.previous_io = {}
+
     def update(self):
 
         data = {}
 
         partitions = psutil.disk_partitions()
-        io = psutil.disk_io_counters(perdisk=True)
 
         data['partitions'] = {}
         for partition in partitions:
 
-            name = partition.device.split('/')[-1]
-
+            name = partition.device.split('/')[-1].replace('.', '-')
             data['partitions'][name] = partition._asdict()
             data['partitions'][name]['name'] = name
 
             data['partitions'][name]['usage'] = psutil.disk_usage(partition.mountpoint)._asdict()
-
+        
+        io = psutil.disk_io_counters(perdisk=True)
         data['io'] = {}
         for disk, info in io.items():
-            data['io'][disk] = info._asdict()
+
+            previous_info = self.previous_io.get(disk, None)
+
+            if previous_info is None:
+
+                data['io'][disk] = {
+                    'read_count': 0,
+                    'write_count': 0,
+                    'read_bytes': 0,
+                    'write_bytes': 0,
+                    'read_time': 0,
+                    'write_time': 0,
+                    'busy_time': 0
+                }
+
+            else:
+
+                info = info._asdict()
+                previous_info = previous_info._asdict()
+
+                data['io'][disk] = {}
+                for k in ['read_count', 'write_count', 'read_bytes', 'write_bytes', 'read_time', 'write_time', 'busy_time']:
+                    data['io'][disk][k] = (info[k] - previous_info[k]) * self.app.config['FPS']
+
+            #data['io'][disk] = info._asdict()
+
 
         self.queue_data.put(data, block=True)
+        self.previous_io = io
 
 
 class NetdataCollector(Collector):
@@ -1107,16 +1137,73 @@ class DiskMonitor(Monitor):
 
     collector_type = DiskCollector
 
+    def __init__(self, *args, **kwargs):
+
+        super(DiskMonitor, self).__init__(*args, **kwargs)
+
+        self.normalization_values = {}
+
+        io = psutil.disk_io_counters(perdisk=True)
+        for disk, info in io.items():
+
+            #self.normalization_values[disk] = info._asdict()
+            for key, value in info._asdict().items():
+
+                element = '.'.join(['io', disk, key])
+
+                if key.endswith('_bytes'):
+                    self.normalization_values[element] = 100 * 1024 ** 2 # assume baseline ability of 100 MByte/s
+
+                elif key.endswith('_count'):
+                    self.normalization_values[element] = 0 # FIXME: I have 0 clue what a reasonable baseline here is
+
+                elif key.endswith('_time'):
+                    self.normalization_values[element] = 1000 # one second of data, collector reports data in milliseconds/s
+
+                else:
+                    self.normalization_values[element] = 0
+
 
     def normalize(self, element):
 
-        print(self.data)
+        parts = element.split('.')
+
+        if parts[0] == 'io':
+
+            disk, key = parts[1:]
+
+            value = self.data['io'][disk][key]
+            if self.normalization_values[element] < value:
+                self.normalization_values[element] = value
+
+            return self.data['io'][disk][key] / self.normalization_values[element]
+
+        elif parts[0] == 'partitions':
+
+            name = parts[1]
+            info = self.data['partitions'][name]['usage']
+
+            return info['used'] / info['total']
+
         return 0
 
 
     def caption(self, fmt):
 
-        return fmt
+        data = DotDict()
+
+        data['partitions'] = DotDict()
+        for name, partition in self.data['partitions'].items():
+
+            part_data = DotDict()
+            for key in ['name', 'device', 'mountpoint', 'fstype', 'opts']:
+                part_data[key] = partition[key]
+
+            part_data['usage'] = DotDict(partition['usage'])
+
+            data['partitions'][name] = part_data
+
+        return fmt.format(**data)
 
 
 class NetdataMonitor(Monitor):
@@ -2874,10 +2961,12 @@ class Gulik(object):
 
         box.place(
             'disk',
-            Plot,
+            MirrorPlot,
             width=box.width,
             height=130,
-            elements=['ada0'],
+            elements=[['io.ada0.read_bytes'], ['io.ada0.write_bytes']],
+            autoscale=False,
+            markers=False,
         )
 
         box.place(
