@@ -354,6 +354,25 @@ def ignore_none(*args):
             return arg
 
 
+def condense_addr_parts(items):
+
+    matching = []
+    max_match = min([len(x) for x in items])
+    
+    for i in range(0, max_match):
+
+        s = set()
+        for item_idx in range(0, len(items)):
+            s.add(items[item_idx][i])
+
+        if len(s) > 1: # lazy hack, means not all items have the same part at index i
+            break
+
+        matching.append(items[item_idx][i])
+
+    return '.'.join(matching)
+
+
 def alignment_offset(align, size):
 
     x_align, y_align = align.split('_')
@@ -1112,7 +1131,6 @@ class BatteryMonitor(Monitor):
 
         if not self.data:
             return 0
-
         return self.data.percent / 100.0
 
 
@@ -1192,18 +1210,21 @@ class DiskMonitor(Monitor):
 
         data = DotDict()
 
-        data['partitions'] = DotDict()
-        for name, partition in self.data['partitions'].items():
+        if 'partitions' in data and 'io' in data:
+            data['partitions'] = DotDict()
+            for name, partition in self.data['partitions'].items():
 
-            part_data = DotDict()
-            for key in ['name', 'device', 'mountpoint', 'fstype', 'opts']:
-                part_data[key] = partition[key]
+                part_data = DotDict()
+                for key in ['name', 'device', 'mountpoint', 'fstype', 'opts']:
+                    part_data[key] = partition[key]
 
-            part_data['usage'] = DotDict(partition['usage'])
+                part_data['usage'] = DotDict(partition['usage'])
 
-            data['partitions'][name] = part_data
+                data['partitions'][name] = part_data
 
-        return fmt.format(**data)
+            return fmt.format(**data)
+
+        return fmt
 
 
 class NetdataMonitor(Monitor):
@@ -1481,17 +1502,18 @@ class Gauge(object):
             rownum = legend_height // self.legend_size
 
             if rownum < 1:
+
                 print(f"Can't add autolegend to {self.__class__.__name__}/{self.monitor.component} because of insufficient space: {legend_height}px")
             else:
 
-                colnum = math.ceil(len(self.elements) // rownum) or 1
+                legend_info = self.legend_info()
+                colnum = math.ceil(len(legend_info) // rownum) or 1
                 cell_width = self.inner_width // colnum
 
                 #colors = self.palette(self.colors['foreground'], len(self.elements))
 
                 box = self.app.box(legend_x, legend_y, self.inner_width, legend_height)
 
-                legend_info = self.legend_info()
 
                 if self.legend_order == 'reverse':
                     iterator = reversed(legend_info)
@@ -1828,17 +1850,29 @@ class MirrorRect(Gauge):
 
         """ defines colors for legend elements """
 
-        data = {}
+        data = collections.OrderedDict()
       
         colors = self.palette(self.colors['foreground'], max(len(self.left), len(self.right)))
+        
+        parts = [[] for _ in range(0, len(colors))]
 
         for elements in (self.left, self.right):
             for idx, element in enumerate(elements):
-                data[element] = (colors[idx], element)
+                parts[idx].append(element.split('.'))
+
+        condensed = []
+        for items in parts:
+
+            condensed.append(condense_addr_parts(items))
+
+        assert len(colors) == len(condensed)
+
+        for idx, condensed_name in enumerate(condensed):
+            data[condensed_name] = (colors[idx], condensed_name)
 
         return data
+   
 
-    
     def draw_rect(self, context, value, color, offset=0.0):
 
             self.set_brush(context, color)
@@ -2337,12 +2371,25 @@ class MirrorPlot(Plot):
         data = collections.OrderedDict()
       
         colors = self.palette(self.colors['foreground'], max(len(self.up), len(self.down)))
+        
+        parts = [[] for _ in range(0, len(colors))]
 
         for elements in (self.up, self.down):
             for idx, element in enumerate(elements):
-                data[element] = (colors[idx], element)
+                parts[idx].append(element.split('.'))
+
+        condensed = []
+        for items in parts:
+
+            condensed.append(condense_addr_parts(items))
+
+        assert len(colors) == len(condensed)
+
+        for idx, condensed_name in enumerate(condensed):
+            data[condensed_name] = (colors[idx], condensed_name)
 
         return data
+
 
     def prepare_points(self):
 
@@ -2486,7 +2533,9 @@ class Box(object):
 
         self._last_right = 0
         self._last_top = 0
-        self._last_bottom = 0 
+        self._last_bottom = 0
+
+        self._next_row_x = 0
 
         self.app = app
         self.x = x
@@ -2513,8 +2562,10 @@ class Box(object):
             height = self.height - self._last_bottom
 
         if self._last_right + width > self.width: # move to next "row"
-            x = 0
+            #print("next row", component, cls, kwargs)
+            x = self._next_row_x
             y = self._last_bottom
+            self._next_row_x = 0 # this will probably break adding a third multi-stacked column, but works for now
 
         else:
             x = self._last_right
@@ -2526,11 +2577,15 @@ class Box(object):
         kwargs['height'] = height
         
         self.app.add_gauge(component, cls, **kwargs)
+        
+        if y + height < self._last_bottom:
+            self._next_row_x = self._last_right
 
         self._last_right = x + width
         self._last_top = y
         self._last_bottom = y + height
 
+        assert self._last_bottom <= self.y + self.height, f"Box already full! Can't place {cls.__name__}"
 
 class Gulik(object):
 
@@ -2902,7 +2957,6 @@ class Gulik(object):
             elements=all_cores,
             width=box.width,
             height=130,
-            padding_bottom=50,
             autoscale=True,
             combination='cumulative_force',
             markers=False
@@ -2959,25 +3013,91 @@ class Gulik(object):
         all_nics_up_drop = ['%s.dropout' % x for x in all_nics]
         all_nics_down_drop = ['%s.dropin' % x for x in all_nics]
 
+        partitions = psutil.disk_partitions()
+        all_partitions = []
+        for partition in partitions:
+            name = partition.device.split('/')[-1].replace('.', '-')
+            all_partitions.append(name)
+
+        all_disks = list(psutil.disk_io_counters(perdisk=True))
+        all_disks_read = [f"io.{disk}.read_bytes" for disk in all_disks]
+        all_disks_write = [f"io.{disk}.write_bytes" for disk in all_disks]
+
+        disk_busy_size = 130 / len(all_disks)
+
         box.place(
             'disk',
             MirrorPlot,
-            width=box.width,
+            width=box.width - disk_busy_size,
             height=130,
-            elements=[['io.ada0.read_bytes'], ['io.ada0.write_bytes']],
+            elements=[all_disks_read, all_disks_write],
             autoscale=False,
             markers=False,
+            caption_placement='padding',
+            captions=[
+                {
+                    'text': 'disk',
+                    'position': 'left_top',
+                    'align': 'left_top',
+                    'font_weight': 'Bold',
+                    'operator': Operator.HARD_LIGHT,
+                }
+            ]
         )
+
+        last_gauge = self.gauges[-1]
+        colors = last_gauge.palette(last_gauge.colors['foreground'], len(all_disks))
+        for idx, disk in enumerate(all_disks):
+            box.place(
+                'disk',
+                Arc,
+                width=disk_busy_size,
+                height=disk_busy_size,
+                foreground=colors[idx],
+                legend=False,
+                padding=0,
+                stroke_width=10,
+                elements=[f"io.{disk}.busy_time"]
+            )
+
+#        box.place(
+#            'network',
+#            MirrorArc,
+#            width=box.width,
+#            height=box.width,
+#            padding_bottom=5,
+#            legend=False,
+#            elements=[all_nics_up, all_nics_down],
+#            combination='cumulative_force',
+#            captions=[
+#                {
+#                    'text': 'network',
+#                    'position': 'left_top',
+#                    'align': 'left_top',
+#                    'font_weight': 'Bold',
+#                    'operator': Operator.HARD_LIGHT,
+#                },
+#                {
+#                    'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
+#                    #'text': '{em0.all_addrs}',
+#                    'position': 'center_center',
+#                    'align': 'center_center',
+#                }
+#            ]
+#        )
 
         box.place(
             'network',
-            MirrorArc,
+            MirrorPlot,
             width=box.width,
-            height=box.width,
-            padding_bottom=5,
-            legend=False,
+            height=140,
+            margin_top=15,
+            #padding=15,
+            padding_bottom=50,
             elements=[all_nics_up, all_nics_down],
+            markers=False,
             combination='cumulative_force',
+            caption_placement='padding',
             captions=[
                 {
                     'text': 'network',
@@ -2985,24 +3105,8 @@ class Gulik(object):
                     'align': 'left_top',
                     'font_weight': 'Bold',
                     'operator': Operator.HARD_LIGHT,
-                },
-                {
-                    'text': '{aggregate.counters.bytes_sent}\n{aggregate.counters.bytes_recv}',
-                    #'text': '{em0.all_addrs}',
-                    'position': 'center_center',
-                    'align': 'center_center',
                 }
             ]
-        )
-
-        box.place(
-            'network',
-            MirrorPlot,
-            width=box.width,
-            height=130,
-            elements=[all_nics_up, all_nics_down],
-            markers=False,
-            combination='cumulative_force'
         )
 
         #alignments = ['left_top', 'center_top','right_top']
@@ -3016,19 +3120,30 @@ class Gulik(object):
 
         if psutil.sensors_battery() is not None:
 
-            box.place('battery', Rect, width=box.width, height=60, elements=['battery'], captions=[
+            color = self.config['COLOR_FOREGROUND'].clone()
+            color.alpha = 1
+
+            box.place(
+                'battery',
+                Rect,
+                width=box.width,
+                height=90,
+                margin_top=35,
+                elements=['battery'],
+                foreground=color,
+                captions=[
                     {
                         'text': '{percent}%',
                         'position': 'left_center',
                         'align': 'left_center',
-                        'color': self.config['COLOR_FOREGROUND'],
+                        'color': color,
                         'operator': Operator.DIFFERENCE, # fake cut-out effect, can break with custom configs
                     },
                     {
                         'text': '{state}',
                         'position': 'right_center',
                         'align': 'right_center',
-                        'color': self.config['COLOR_FOREGROUND'],
+                        'color': color,
                         'operator': Operator.DIFFERENCE,
                     },
                 ]
