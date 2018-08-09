@@ -1210,7 +1210,7 @@ class DiskMonitor(Monitor):
 
         data = DotDict()
 
-        if 'partitions' in data and 'io' in data:
+        if 'partitions' in self.data and 'io' in self.data:
             data['partitions'] = DotDict()
             for name, partition in self.data['partitions'].items():
 
@@ -1221,7 +1221,6 @@ class DiskMonitor(Monitor):
                 part_data['usage'] = DotDict(partition['usage'])
 
                 data['partitions'][name] = part_data
-
             return fmt.format(**data)
 
         return fmt
