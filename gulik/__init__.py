@@ -1144,7 +1144,7 @@ class BatteryMonitor(Monitor):
         if not data['power_plugged']:
             data['state'] = 'draining'
         elif data['percent'] == 100:
-            data['state'] = 'Ffll'
+            data['state'] = 'Full'
         else:
             data['state'] = 'charging'
 
