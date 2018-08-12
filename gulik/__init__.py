@@ -500,6 +500,8 @@ DEFAULTS = {
 
     'PATTERN_ARC': None,
     'PATTERN_MIRRORARC': None,
+
+    'BSD_INACCURATE_MEMORY': False,
 }
 
 ## Stuff I'd much rather do without a huge dependency like gtk ##
@@ -612,17 +614,26 @@ class MemoryCollector(Collector):
         total_use = 0
         for process in psutil.process_iter():
 
-            if psutil.LINUX:
-                pmem = process.memory_full_info()
+            if psutil.LINUX or (psutil.BSD and self.app.config['BSD_INACCURATE_MEMORY']):
+
+                if psutil.BSD:
+                    key = 'rss'
+                else:
+                    key = 'pss'
+
+                try:
+                    pmem = process.memory_full_info()._asdict()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                    continue # skip to next process
 
                 processes.append(DotDict({
                     'name': process.name(),
-                    'private': pmem.pss,
-                    'shared': pmem.shared,
-                    'percent': pmem.pss / vmem.total * 100
+                    'private': pmem[key],
+                    #'shared': pmem.shared,
+                    'percent': pmem[key] / vmem.total * 100
                 }))
 
-                total_use += pmem.pss
+                total_use += pmem[key]
 
             elif psutil.BSD:
 
@@ -646,7 +657,7 @@ class MemoryCollector(Collector):
                     processes.append(DotDict({
                         'name': process.name(),
                         'private': private,
-                        'shared': resident - private,
+                        #'shared': resident - private,
                         'percent': private / vmem.total * 100,
                     }))
                     
@@ -669,14 +680,14 @@ class MemoryCollector(Collector):
         info['other'] = DotDict({
             'name': 'other',
             'private': 0,
-            'shared': 0,
+            #'shared': 0,
             'count': 0
         })
 
         for process in processes_sorted[3:]:
 
             info['other']['private'] += process['private']
-            info['other']['shared'] += process['shared']
+            #info['other']['shared'] += process['shared']
             info['other']['count'] += 1
 
         info['other']['percent'] = info['other']['private'] / vmem.total * 100
@@ -935,7 +946,7 @@ class MemoryMonitor(Monitor):
             data[k] = DotDict()
             data[k]['name'] = self.data[k]['name']
             data[k]['private'] = pretty_bytes(self.data[k]['private'])
-            data[k]['shared'] = pretty_bytes(self.data[k]['shared'])
+            #data[k]['shared'] = pretty_bytes(self.data[k]['shared'])
             if k == 'other':
                 data[k]['count'] = self.data[k]['count']
 
